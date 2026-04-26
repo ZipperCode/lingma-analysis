@@ -1,0 +1,35 @@
+Starting Lingma...
+PID: 16908
+Pipe: \\.\pipe\lingma-4f2768
+[Hook] WSASend OK
+[Hook] connect OK
+[Hook] Ready
+
+Connecting via named pipe...
+Connected!
+
+[1] initialize
+  Response: {"jsonrpc":"2.0","result":{"capabilities":{"textDocumentSync":{"openClose":true,"change":2,"save":{}},"completionProvider":{"triggerCharacters":["."," ","\r"],"resolveProvider":true},"signatureHelpProvider":{},"codeLensProvider":{},"documentLinkProvider":{},"documentOnTypeFormattingProvider":{"firstTriggerCharacter":""},"executeCommandProvider":{"commands":[]},"workspace":{"workspaceFolders":{"supported":true,"changeNotifications":"workspace/didChangeWorkspaceFolders"}}},"serverInfo":{"name":"lingma","version":"2.11.1"},"experimental":{}},"id":1}
+
+[2] initialized
+
+[3] chat/sendMessage
+  Response: {"jsonrpc":"2.0","result":null,"error":{"code":-32601,"message":"method not found: chat/sendMessage"},"id":2}
+
+[4] completion/complete
+  Response: {"jsonrpc":"2.0","result":null,"error":{"code":-32601,"message":"method not found: completion/complete"},"id":3}
+
+[5] algo/model/info
+  Response: {"jsonrpc":"2.0","result":null,"error":{"code":-32601,"message":"method not found: algo/model/info"},"id":4}
+
+[6] workspace/symbol
+  Response: {"jsonrpc":"2.0","result":null,"error":{"code":-32601,"message":"method not found: workspace/symbol"},"id":5}
+
+Waiting 30s for remote traffic...
+  0s elapsed
+  5s elapsed
+  10s elapsed
+  15s elapsed
+  20s elapsed
+  25s elapsed
+--- Done ---
