@@ -15,6 +15,16 @@ import (
 const (
 	userLoginURL    = "https://lingma.alibabacloud.com/algo/api/v3/user/login?Encode=1"
 	userLoginAESKey = "QbgzpWzN7tfe43gf"
+
+	// OldSignatureKey is the session_key for old Signature flow (addBigModelSignatureHeaders).
+	// Extracted via static disassembly of Lingma v2.11.1: the key is conditionally selected
+	// between this base64 literal and &Q3C3!N5mP5bbNcyryMY@KZtUFLRGbTe, controlled by a
+	// byte flag in .data. The base64 form decodes to "war, war never changes".
+	// Formula: MD5("cosy&" + key + "&" + RFC1123_date). Verified against 1 captured oracle.
+	OldSignatureKey = "d2FyLCB3YXIgbmV2ZXIgY2hhbmdlcw=="
+
+	// OldSignatureKeyAlt is the alternative key when the runtime flag is set.
+	OldSignatureKeyAlt = "&Q3C3!N5mP5bbNcyryMY@KZtUFLRGbTe"
 )
 
 type userLoginRequest struct {
@@ -130,7 +140,6 @@ type signatureStrategy struct {
 func buildSignatureStrategies(sessionKey string) []signatureStrategy {
 	now := time.Now().UTC()
 	rfc1123 := now.Format(time.RFC1123)
-	unixTS := fmt.Sprintf("%d", now.Unix())
 
 	strategies := []signatureStrategy{
 		{
@@ -141,24 +150,30 @@ func buildSignatureStrategies(sessionKey string) []signatureStrategy {
 		},
 	}
 
+	// Determine the key(s) to try
+	keys := []string{}
 	if sessionKey != "" {
-		preimage := rfc1123 + sessionKey
+		// User-provided key takes precedence
+		keys = append(keys, sessionKey)
+	} else {
+		// Default keys extracted from Lingma v2.11.1 binary (see constants above)
+		keys = append(keys, OldSignatureKey, OldSignatureKeyAlt)
+	}
+
+	for _, key := range keys {
+		k := key
+
+		// Formula extracted via static disassembly of addBigModelSignatureHeaders:
+		// MD5("cosy" + "&" + key + "&" + RFC1123_date)
+		// The "&" is the join character used by the string-join+MD5 function @ RVA 0x4563C0
+		preimage := "cosy&" + k + "&" + rfc1123
 		sig := fmt.Sprintf("%x", md5.Sum([]byte(preimage)))
+
 		strategies = append(strategies, signatureStrategy{
-			name: "md5-rfc1123",
+			name: "cosy-sig",
 			apply: func(req *http.Request) {
 				req.Header.Set("Date", rfc1123)
 				req.Header.Set("Signature", sig)
-			},
-		})
-
-		preimage2 := unixTS + sessionKey
-		sig2 := fmt.Sprintf("%x", md5.Sum([]byte(preimage2)))
-		strategies = append(strategies, signatureStrategy{
-			name: "md5-unix",
-			apply: func(req *http.Request) {
-				req.Header.Set("Date", rfc1123)
-				req.Header.Set("Signature", sig2)
 			},
 		})
 	}

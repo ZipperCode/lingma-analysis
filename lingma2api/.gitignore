@@ -1,2 +1,5 @@
 auth/credentials.json
 auth/bootstrap-callback.json
+configs/client_id.txt
+configs/session_key.txt
+auth/credentials_remote.json

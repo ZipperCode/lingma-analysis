@@ -3,3 +3,8 @@ capture/
 node_modules/
 lib/
 __pycache__
+tools/md5encode_dump.log
+auth/credentials_remote.json
+lingma2api/configs/client_id.txt
+lingma2api/configs/session_key.txt
+.playwright-mcp

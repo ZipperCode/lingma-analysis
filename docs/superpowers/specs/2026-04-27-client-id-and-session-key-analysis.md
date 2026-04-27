@@ -121,15 +121,42 @@ go run ./cmd/lingma-auth-bootstrap \
 3. 在地址栏捕获 `signin.alibabacloud.com/oauth2/v1/auth?client_id=<HERE>`
 4. 将 client_id 传入 `--client-id` 参数
 
-## 4. 关键文件索引
+## 4. 方案 D：refresh 续命（Stage C 已完成）
+
+`lingma-auth-bootstrap` 现已支持 `--refresh` 子模式，在 access_token 过期后无需重新走浏览器登录即可续命。
+
+```bash
+go run ./cmd/lingma-auth-bootstrap \
+  --refresh ./auth/credentials.json \
+  --client-id <REAL_CLIENT_ID>
+```
+
+实现细节见 `docs/topics/refresh-token-flow.md`。
+
+## 5. 方案 E：session_key 破解（Stage B 进行中）
+
+已建立三条并行路径：
+
+1. **B3（Frida hook）**：`tools/md5encode_dump.js` hook `code.alibaba-inc.com/cosy/encrypt.Md5Encode`
+2. **B2（字典攻击）**：`tools/session_key_oracle.py` 枚举候选 key × 公式，用 3 组已知 oracle 交叉验证
+3. **B1（静态反编译）**：IDA/Ghidra 从 `addBigModelSignatureHeaders` 向下追踪 key 的 `.rodata` 偏移
+
+详细过程见 `docs/topics/session-key-cracking.md`。
+
+## 6. 关键文件索引
 
 | 文件 | 内容 |
 |------|------|
 | `internal/auth/remote_login.go` | 纯远程 user/login 实现，含多策略 Signature 尝试 |
 | `internal/auth/encode1.go` | Encode=1 + AES 编解码（Go 移植） |
-| `internal/auth/token_exchange.go` | OAuth code → access_token 交换 |
+| `internal/auth/token_exchange.go` | OAuth code → access_token 交换 + refresh_token 续命 |
 | `internal/auth/credential_derive.go` | Lingma Bridge 凭据派生 |
-| `cmd/lingma-auth-bootstrap/main.go` | Bootstrap CLI，支持 `--use-lingma` 和 `--session-key` |
+| `cmd/lingma-auth-bootstrap/main.go` | Bootstrap CLI，支持 `--use-lingma`、`--session-key`、`--capture-client-id`、`--refresh` |
 | `tools/forge_signing.py` | 二进制提取的 SECRET_FULL 字符串 |
 | `tools/getappsalt_analysis_v2.md` | addBigModelSignatureHeaders 反编译分析 |
+| `tools/md5encode_dump.js` | Frida hook Md5Encode（B3 主路径） |
+| `tools/session_key_oracle.py` | 字典攻击 + 交叉验证（B2 fallback） |
 | `docs/lingma-analysis-endpoint-auth.md` | 两套签名系统完整文档 |
+| `docs/topics/client-id-extraction.md` | Stage A 过程文档 |
+| `docs/topics/refresh-token-flow.md` | Stage C 过程文档 |
+| `docs/topics/session-key-cracking.md` | Stage B 过程文档 |

@@ -2,6 +2,8 @@ package auth
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -37,6 +39,52 @@ func BuildAuthorizeURL(cfg AuthorizeConfig) (string, string, string, error) {
 	values.Set("state", state)
 	values.Set("code_challenge", challenge)
 	values.Set("code_challenge_method", "S256")
+
+	return baseURL + "?" + values.Encode(), state, verifier, nil
+}
+
+// LingmaLoginEntryConfig 用于生成 Lingma 服务器侧登录入口 URL（不含 client_id）。
+// Lingma 服务器在收到该 URL 后会注入 client_id 并 302 到 signin.alibabacloud.com/oauth2/v1/auth，
+// 在浏览器抓取该跳转链是目前公认的 client_id 提取路径。
+type LingmaLoginEntryConfig struct {
+	MachineID string // 留空则自动生成 UUID
+	Port      string // 回调端口（用于构造 lingma 登录 URL 的 port 参数）
+	BaseURL   string // 默认 https://lingma.alibabacloud.com/lingma/login
+}
+
+// BuildLingmaLoginEntryURL 构造一个未注入 client_id 的 Lingma 登录入口 URL。
+// 返回 (loginURL, state, verifier, error)。
+// 用法：将 loginURL 喂给 WrapLingmaLoginURLForBrowser 得到浏览器入口，复制到浏览器后
+// 由 Lingma 服务器在 302 链中注入真正的 client_id。
+func BuildLingmaLoginEntryURL(cfg LingmaLoginEntryConfig) (string, string, string, error) {
+	machineID := cfg.MachineID
+	if machineID == "" {
+		machineID = NewMachineID()
+	}
+	if cfg.Port == "" {
+		return "", "", "", errors.New("missing port")
+	}
+
+	baseURL := cfg.BaseURL
+	if baseURL == "" {
+		baseURL = "https://lingma.alibabacloud.com/lingma/login"
+	}
+
+	state := GenerateState()
+	verifier, challenge := GeneratePKCE()
+	nonceBuf := make([]byte, 16)
+	if _, err := rand.Read(nonceBuf); err != nil {
+		return "", "", "", err
+	}
+	nonce := hex.EncodeToString(nonceBuf)
+
+	values := url.Values{}
+	values.Set("state", state)
+	values.Set("challenge", challenge)
+	values.Set("challenge_method", "S256")
+	values.Set("machine_id", machineID)
+	values.Set("nonce", nonce)
+	values.Set("port", cfg.Port)
 
 	return baseURL + "?" + values.Encode(), state, verifier, nil
 }

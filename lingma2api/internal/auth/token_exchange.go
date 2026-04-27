@@ -21,6 +21,13 @@ type TokenExchangeConfig struct {
 	HTTPClient   *http.Client
 }
 
+type RefreshTokenConfig struct {
+	RefreshToken string
+	ClientID     string
+	TokenURL     string
+	HTTPClient   *http.Client
+}
+
 type ExchangedTokens struct {
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token"`
@@ -109,6 +116,64 @@ func ExchangeCodeForTokens(ctx context.Context, cfg TokenExchangeConfig) (Exchan
 	}
 	if tokens.AccessToken == "" {
 		return ExchangedTokens{}, fmt.Errorf("token response missing access_token")
+	}
+	return tokens, nil
+}
+
+func RefreshTokens(ctx context.Context, cfg RefreshTokenConfig) (ExchangedTokens, error) {
+	if cfg.RefreshToken == "" {
+		return ExchangedTokens{}, fmt.Errorf("missing refresh token")
+	}
+	if cfg.ClientID == "" {
+		return ExchangedTokens{}, fmt.Errorf("missing client id")
+	}
+
+	tokenURL := cfg.TokenURL
+	if tokenURL == "" {
+		tokenURL = "https://oauth.alibabacloud.com/v1/token"
+	}
+
+	form := url.Values{}
+	form.Set("grant_type", "refresh_token")
+	form.Set("refresh_token", cfg.RefreshToken)
+	form.Set("client_id", cfg.ClientID)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenURL, strings.NewReader(form.Encode()))
+	if err != nil {
+		return ExchangedTokens{}, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	client := cfg.HTTPClient
+	if client == nil {
+		client = &http.Client{Timeout: 30 * time.Second}
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return ExchangedTokens{}, fmt.Errorf("refresh token request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return ExchangedTokens{}, fmt.Errorf("read refresh token response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		var tokenErr TokenExchangeError
+		if json.Unmarshal(body, &tokenErr) == nil && tokenErr.ErrorCode != "" {
+			return ExchangedTokens{}, &tokenErr
+		}
+		return ExchangedTokens{}, fmt.Errorf("refresh token http %d: %s", resp.StatusCode, string(body))
+	}
+
+	var tokens ExchangedTokens
+	if err := json.Unmarshal(body, &tokens); err != nil {
+		return ExchangedTokens{}, fmt.Errorf("parse refresh token response: %w", err)
+	}
+	if tokens.AccessToken == "" {
+		return ExchangedTokens{}, fmt.Errorf("refresh token response missing access_token")
 	}
 	return tokens, nil
 }

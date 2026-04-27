@@ -180,3 +180,125 @@ func TestNewMachineID(t *testing.T) {
 		t.Errorf("expected 5 parts in UUID, got %d: %q", len(parts), id1)
 	}
 }
+
+func TestRefreshTokens_OK(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("expected POST, got %s", r.Method)
+		}
+		if err := r.ParseForm(); err != nil {
+			t.Fatalf("parse form: %v", err)
+		}
+		if r.FormValue("grant_type") != "refresh_token" {
+			t.Errorf("grant_type: got %q, want refresh_token", r.FormValue("grant_type"))
+		}
+		if r.FormValue("refresh_token") != "rt-123" {
+			t.Errorf("refresh_token: got %q, want rt-123", r.FormValue("refresh_token"))
+		}
+		if r.FormValue("client_id") != "client-456" {
+			t.Errorf("client_id: got %q, want client-456", r.FormValue("client_id"))
+		}
+
+		resp := ExchangedTokens{
+			AccessToken:  "at-new",
+			RefreshToken: "rt-new",
+			ExpiresIn:    3600,
+			TokenType:    "Bearer",
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	tokens, err := RefreshTokens(t.Context(), RefreshTokenConfig{
+		RefreshToken: "rt-123",
+		ClientID:     "client-456",
+		TokenURL:     server.URL,
+	})
+	if err != nil {
+		t.Fatalf("RefreshTokens() error = %v", err)
+	}
+	if tokens.AccessToken != "at-new" {
+		t.Errorf("access_token: got %q, want at-new", tokens.AccessToken)
+	}
+	if tokens.RefreshToken != "rt-new" {
+		t.Errorf("refresh_token: got %q, want rt-new", tokens.RefreshToken)
+	}
+}
+
+func TestRefreshTokens_StructuredError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":"invalid_grant","error_description":"Refresh token expired"}`))
+	}))
+	defer server.Close()
+
+	_, err := RefreshTokens(t.Context(), RefreshTokenConfig{
+		RefreshToken: "rt-bad",
+		ClientID:     "client-456",
+		TokenURL:     server.URL,
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	tokenErr, ok := err.(*TokenExchangeError)
+	if !ok {
+		t.Fatalf("expected *TokenExchangeError, got %T: %v", err, err)
+	}
+	if tokenErr.ErrorCode != "invalid_grant" {
+		t.Errorf("error_code: got %q, want invalid_grant", tokenErr.ErrorCode)
+	}
+	if tokenErr.ErrorDescription != "Refresh token expired" {
+		t.Errorf("error_description: got %q, want 'Refresh token expired'", tokenErr.ErrorDescription)
+	}
+}
+
+func TestRefreshTokens_FallbackError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte("raw body without json"))
+	}))
+	defer server.Close()
+
+	_, err := RefreshTokens(t.Context(), RefreshTokenConfig{
+		RefreshToken: "rt-bad",
+		ClientID:     "client-456",
+		TokenURL:     server.URL,
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if _, ok := err.(*TokenExchangeError); ok {
+		t.Fatal("expected fallback error, not TokenExchangeError")
+	}
+	if !strings.Contains(err.Error(), "400") {
+		t.Errorf("expected error to contain status 400, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "raw body without json") {
+		t.Errorf("expected error to contain raw body, got: %v", err)
+	}
+}
+
+func TestRefreshTokens_MissingRefreshToken(t *testing.T) {
+	_, err := RefreshTokens(t.Context(), RefreshTokenConfig{
+		ClientID: "client-456",
+	})
+	if err == nil {
+		t.Fatal("expected error for missing refresh token")
+	}
+	if !strings.Contains(err.Error(), "missing refresh token") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestRefreshTokens_MissingClientID(t *testing.T) {
+	_, err := RefreshTokens(t.Context(), RefreshTokenConfig{
+		RefreshToken: "rt-123",
+	})
+	if err == nil {
+		t.Fatal("expected error for missing client id")
+	}
+	if !strings.Contains(err.Error(), "missing client id") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
