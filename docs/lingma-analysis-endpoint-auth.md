@@ -3,6 +3,7 @@
 > 编辑说明（2026-04-25）：
 > 这份文件现在主要保留长链证据和阶段性补证，不再作为“当前最终状态”的唯一来源。
 > 如果你只想知道当前已经成立到什么程度，请先看 `docs/lingma-analysis-overview.md` 和 `docs/remote-api-direct-connection.md`。
+> 另外，`2026-04-26` 之后远端 Chat API 已确认可直接发送原始 JSON body；本文件中凡是把 `agent_chat_generation` 视为“仍必须依赖 Encode=1 模板重放”的段落，都应按阶段性结论理解，而不是当前最终结论。
 
 更新时间：2026-04-24
 

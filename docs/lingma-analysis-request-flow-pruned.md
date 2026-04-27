@@ -70,16 +70,12 @@
 当前已经成立：
 
 - 可以不走 plugin UI，直接复用本地 `37010`
-- 可以在受约束条件下直接调用远端 HTTP API
+- 可以直接调用远端 HTTP API，且 Chat body 已可自由构造
 
-当前仍未成立：
+但这份文档不负责展开远端直连最新状态；那部分请直接看：
 
-- 自由构造任意 `agent_chat_generation` 请求体并稳定远端直连
-
-原因当前已经收敛到：
-
-- `agent_chat_generation` 的二进制载荷仍与模板文本和业务元数据绑定
-- 完整 `Encode=1` body 生成链仍未独立重建
+- [lingma-analysis-final-status.md](./lingma-analysis-final-status.md)
+- [remote-api-direct-connection.md](./remote-api-direct-connection.md)
 
 ## plugin 到本地服务
 
@@ -174,7 +170,7 @@ plugin 侧主聊天链，当前可收敛为：
 
 补充一条当前已经成立的新边界：
 
-- 现在仓库里也已经存在受约束的远端直连实现
+- 现在仓库里也已经存在可工作的远端直连实现
 - 但那条线解决的是“能否脱离本地进程发送远端请求”
 - 这份文档解决的是“本地 `37010` 主线到底怎么工作”
 

@@ -1,5 +1,9 @@
 # Lingma Token、登录态与模型刷新链
 
+> 编辑说明（2026-04-27）：
+> 这份文件聚焦登录态、用户态落盘和模型刷新链。
+> 如果你要看“当前远端直连是否已经成立”，请优先看 `docs/lingma-analysis-final-status.md` 和 `docs/remote-api-direct-connection.md`。
+
 更新时间：2026-04-24
 
 ## 适合什么时候看
@@ -14,9 +18,9 @@
 
 相关文档：
 
-- 总览入口：[lingma-analysis-overview.md](/Users/Zipper/Github/lingma/docs/lingma-analysis-overview.md)
-- 本地服务与签名边界：[lingma-analysis-endpoint-auth.md](/Users/Zipper/Github/lingma/docs/lingma-analysis-endpoint-auth.md)
-- 完整时间线：[lingma-analysis-snapshots.md](/Users/Zipper/Github/lingma/docs/archive/lingma-analysis-snapshots.md)
+- 总览入口：[lingma-analysis-overview.md](./lingma-analysis-overview.md)
+- 本地服务与签名边界：[lingma-analysis-endpoint-auth.md](./lingma-analysis-endpoint-auth.md)
+- 完整时间线：[lingma-analysis-snapshots.md](./archive/lingma-analysis-snapshots.md)
 
 ## 高置信结论
 
@@ -744,4 +748,4 @@
 
 - 如果你要研究“登录后本地拿到了什么、如何进入用户态、模型如何刷新”，看这份文档即可。
 - 如果你要研究“为什么仍然不能直接打远端 SSE”，应该转去看：
-  - [lingma-analysis-endpoint-auth.md](/Users/Zipper/Github/lingma/docs/lingma-analysis-endpoint-auth.md)
+  - [lingma-analysis-endpoint-auth.md](./lingma-analysis-endpoint-auth.md)

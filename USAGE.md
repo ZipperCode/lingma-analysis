@@ -1,16 +1,22 @@
-# Lingma 独立 API 调用指南
+# Lingma 调用与脚本使用指南
 
-脱离 Lingma plugin 和本地服务进程，自主进行大模型 API 调用。
+更新时间：2026-04-27
+
+这份文件只负责“怎么调用、怎么运行脚本、该看哪份实现”。
+如果你要先建立对整个分析仓库的认识，请先看 [`docs/README.md`](./docs/README.md)。
 
 ## 前置条件
 
-1. **已登录状态**: `~/.lingma/cache/id` 和 `cache/user` 文件存在
-2. **curl 可用**: 服务器有 TLS 指纹检测，Python requests 被 403 拒绝
-3. **捕获数据**: 至少一份包含 `agent_chat_generation` body 的捕获文件
+1. **凭据来源满足其一**:
+   - 本地 `~/.lingma/cache/id` 和 `~/.lingma/cache/user`
+   - 环境变量
+   - 便携配置文件
+   - 直接传参
+2. **curl 可用**: 服务器有 TLS 指纹检测，Python `requests` 会被拒绝
 
 ## 快速开始
 
-### 方式一：本地 37010 API（推荐，完全自由）
+### 方式一：本地 `37010` API（推荐，最稳）
 
 ```bash
 # 单次提问
@@ -29,27 +35,32 @@ python lingma_client.py --interactive
 - 需要本地 Lingma 服务运行（登录状态下自动启动）
 - 无法脱离本地进程
 
-### 方式二：远端 API 直连（部分自由）
+### 方式二：远端 API 直连（库优先）
 
 ```bash
-# 获取模型列表
-python lingma_remote_api.py --action models
+# 直接运行会执行内置 smoke demo
+python lingma_remote_api.py
+```
 
-# 发送聊天请求
-python lingma_remote_api.py --action chat -q "你好"
+更实用的方式是直接按库调用：
 
-# 指定捕获数据源
-python lingma_remote_api.py --action chat -q "你是谁？" --capture capture/my_capture.jsonl
+```python
+from lingma_remote_api import LingmaRemoteAPI
+
+api = LingmaRemoteAPI()
+print(api.get_models()[:3])
+print(api.chat("你好"))
 ```
 
 **优势：**
 - 完全脱离本地 Lingma 进程
 - 纯 HTTP 调用
+- Chat body 直接发送原始 JSON
+- 支持自由构造 `messages`、系统提示词和模型选择
 
 **限制：**
-- 只能修改用户消息内容（受原始字节长度限制）
-- 系统提示词和二进制载荷来自捕获数据
-- 依赖 curl 子进程（TLS 指纹）
+- 依赖有效凭据
+- 依赖 `curl` 子进程处理 TLS 指纹
 
 ## Python 库使用
 
@@ -83,23 +94,19 @@ for m in models:
 # 发送聊天
 response = api.chat("你好")
 print(response)
-
-# 任意 API 请求
-result = api.request('GET', '/algo/api/v2/model/list')
-print(result.stdout)
 ```
 
 ## 核心模块
 
 | 模块 | 说明 |
 |------|------|
-| `enc_b64()` / `dec_b64()` | 自定义 base64 编码/解码 |
-| `load_credentials()` | 读取并解密 `cache/user` |
-| `make_bearer()` | 生成带 MD5 签名的 Bearer token |
-| `make_headers()` | 生成完整远端请求头 |
-| `BodyTemplate` | 从捕获数据提取 body 模板，支持修改用户消息 |
-| `curl_request()` | 使用 curl 发送 HTTP（绕过 TLS 指纹） |
-| `parse_sse_response()` | 解析 SSE 流式响应 |
+| `lingma_encode()` / `lingma_decode()` | `Encode=1` 编码/解码工具 |
+| `LingmaRemoteAPI._read_credentials()` | 读取凭据材料 |
+| `LingmaRemoteAPI._make_bearer()` | 生成带 MD5 签名的 Bearer token |
+| `LingmaRemoteAPI._make_headers()` | 生成完整远端请求头 |
+| `LingmaRemoteAPI._build_chat_body()` | 构造原始 JSON chat body |
+| `LingmaRemoteAPI.chat()` | 发起远端聊天请求 |
+| `LingmaRemoteAPI.get_models()` | 获取模型列表 |
 
 ## 签名公式
 
@@ -123,22 +130,24 @@ _doRTgHZBKcGVjlvpC,@aFSx#DPuNJme&i*MzLOEn)sUrthbf%Y^w.(kIQyXqWA!
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/algo/api/v2/model/list` | 模型列表 |
-| POST | `/algo/api/v2/service/pro/sse/agent_chat_generation?...&Encode=1` | 聊天生成 |
+| POST | `/algo/api/v2/service/pro/sse/agent_chat_generation?...` | 聊天生成 |
 | GET | `/algo/api/v2/config/getDataPolicy?...` | 数据策略 |
 | POST | `/algo/api/v3/user/status?Encode=1` | 用户状态 |
 | POST | `/algo/api/v1/heartbeat?Encode=1` | 心跳 |
 
 ## 当前限制
 
-1. **远端 POST 二进制载荷**: 与系统提示词绑定，无法独立生成。需要 Frida hook `cosy/remoting.encodeRequestBody` 完全破解。
-2. **消息长度限制**: 远端直连时，用户消息需匹配原始捕获的字节长度。
+1. **凭据依赖**: 远端直连仍依赖 Lingma 登录态导出的凭据材料。
+2. **OAuth 独立化未完成**: 登录和刷新链尚未完全脱离现有本地状态。
 3. **TLS 指纹**: 必须使用 curl，纯 Python HTTP 客户端被拒绝。
 
 ## 文档索引
 
 | 文档 | 说明 |
 |------|------|
-| [lingma-complete-analysis.md](docs/lingma-complete-analysis.md) | 完整逆向分析报告 |
-| [lingma-analysis-overview.md](docs/lingma-analysis-overview.md) | 架构总览（旧版入口） |
-| [encoding-alphabet-cracked.md](docs/encoding-alphabet-cracked.md) | 编码字母表破解详情 |
-| [heartbeat-body-structure.md](docs/heartbeat-body-structure.md) | Heartbeat body 结构 |
+| [docs/README.md](docs/README.md) | 分析文档总入口 |
+| [docs/lingma-analysis-overview.md](docs/lingma-analysis-overview.md) | 当前结论总览 |
+| [docs/lingma-analysis-final-status.md](docs/lingma-analysis-final-status.md) | 最新状态总结 |
+| [docs/remote-api-direct-connection.md](docs/remote-api-direct-connection.md) | 远端直连现状 |
+| [docs/topics/encoding-alphabet-cracked.md](docs/topics/encoding-alphabet-cracked.md) | 编码字母表破解详情 |
+| [docs/topics/heartbeat-body-structure.md](docs/topics/heartbeat-body-structure.md) | Heartbeat body 结构 |

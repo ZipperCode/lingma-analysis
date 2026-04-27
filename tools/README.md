@@ -1,6 +1,6 @@
 # tools 目录整理说明
 
-更新时间：2026-04-25
+更新时间：2026-04-27
 
 ## 目的
 
@@ -19,7 +19,7 @@
 - `../lingma_client.py`
   - 当前最稳的本地 `37010` 客户端
 - `../lingma_remote_api.py`
-  - 当前受约束的远端直连客户端
+  - 当前远端直连客户端
 - `lingma_probe.py`
   - 最小本地协议探针
 - `offprocess_model_list.ps1`
@@ -31,6 +31,7 @@
 
 优先看这些：
 
+- `../docs/README.md`
 - `../docs/lingma-analysis-overview.md`
 - `../docs/lingma-analysis-final-status.md`
 - `../docs/remote-api-direct-connection.md`
@@ -38,7 +39,7 @@
 
 ## 历史报告
 
-以下 Markdown 仍有证据价值，但不再代表当前总状态：
+以下 Markdown 仍有证据价值，但不再代表当前总状态。整理后的归档副本统一放在 `../docs/tools-archive/`，根目录这些同名文件只保留为历史工作副本：
 
 - `auth_final_report.md`
 - `signing_final.md`

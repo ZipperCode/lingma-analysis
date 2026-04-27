@@ -1,12 +1,16 @@
 # Lingma 分析总览
 
-更新时间：2026-04-25
+更新时间：2026-04-27
 
 ## 这份文档负责什么
 
 - 作为当前仓库的总入口
 - 只保留已经被代码或实测坐实的主结论
 - 把“当前可用主线”和“历史阶段结论”明确分开，避免继续被旧判断污染
+
+如果要看目录分层和推荐阅读顺序，请先看：
+
+- [README.md](./README.md)
 
 如果要追逐轮证据、运行时样本和长链推导，请看：
 
@@ -41,7 +45,7 @@
 
 #### 路线 B：直接远端 HTTP API
 
-- 当前状态：已成立，但仍是受约束直连
+- 当前状态：已成立，且 Chat API 已可自由构造
 - 已实测成立：
   - `GET /algo/api/v2/model/list`
   - `POST /algo/api/v2/service/pro/sse/agent_chat_generation`
@@ -49,13 +53,17 @@
   - [../lingma_remote_api.py](../lingma_remote_api.py)
   - [remote-api-direct-connection.md](./remote-api-direct-connection.md)
 
-这条路线已经脱离 plugin，也可以在不启动本地 `Lingma` 进程的情况下直接请求远端，但当前仍依赖：
+这条路线已经脱离 plugin，也可以在不启动本地 `Lingma` 进程的情况下直接请求远端。当前已经成立的是：
 
-- `~/.lingma/cache` 中的本地凭据
-- 已捕获的 `agent_chat_generation` 模板 body
-- 只在模板允许范围内改写用户消息
+- Chat body 直接发送原始 JSON
+- `messages`、系统提示词和模型选择可自由构造
+- Bearer 签名和请求头可独立生成
 
-因此它不是“完全自由构造任意请求体”的最终形态，而是“已可工作的受约束重放式直连”。
+当前仍然存在的约束是：
+
+- 仍依赖现有 Lingma 登录态导出的凭据
+- OAuth 登录 / 刷新链未完全独立化
+- TLS 指纹仍需要 `curl` 或等价能力
 
 ### 3. 当前真正剩下的硬问题已经收窄
 
@@ -68,9 +76,9 @@
 
 当前真正剩下的问题是：
 
-- 如何独立构造 `agent_chat_generation` 的完整 `Encode=1` body
-- 如何摆脱对已捕获二进制载荷的依赖
-- 如何把远端直连从“受约束重放”推进到“可自由构造任意业务请求”
+- 如何独立实现 OAuth 登录与刷新链
+- 如何摆脱对现有 `~/.lingma/cache` 凭据材料的依赖
+- 哪些非 Chat 端点仍然必须保留 `Encode=1` / 本地运行时能力
 
 ### 4. `tools/` 目录里大量编号脚本是历史实验，不是当前事实源
 
@@ -103,14 +111,14 @@
 
 ### 3. 最后再看专项细节
 
-- [encoding-alphabet-cracked.md](./encoding-alphabet-cracked.md)
-- [encryption-analysis.md](./encryption-analysis.md)
+- [topics/encoding-alphabet-cracked.md](./topics/encoding-alphabet-cracked.md)
+- [topics/encryption-analysis.md](./topics/encryption-analysis.md)
 - [archive/lingma-analysis-snapshots.md](./archive/lingma-analysis-snapshots.md)
 
 ## 当前最稳的工程建议
 
 - 如果目标是“稳定地自动调用 Lingma 能力”，优先继续沿 `37010` 主线工程化。
-- 如果目标是“彻底脱离 plugin 和本地进程”，当前已经有可工作的远端 PoC，但下一步应该集中在摆脱捕获模板依赖，而不是继续重复证明 plugin 只是 UI。
+- 如果目标是“彻底脱离 plugin 和本地进程”，当前远端直连已经可工作，下一步应集中在凭据独立化、登录刷新链和 TLS 指纹能力，而不是继续回头证明 Chat body 还能不能自由构造。
 - 如果继续扩展 `tools/`，优先新增明确命名的主线脚本，不要再堆新的 `vN` 和 `test_*` 变体而不收口。
 
 ## 当前主文件

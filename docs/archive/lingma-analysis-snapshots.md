@@ -2,9 +2,9 @@
 >
 > 日常查阅建议优先阅读：
 >
-> - 总览入口：`/Users/Zipper/Github/lingma/docs/lingma-analysis-overview.md`
-> - 本地服务 / endpoint / 签名边界：`/Users/Zipper/Github/lingma/docs/lingma-analysis-endpoint-auth.md`
-> - token / 登录态 / 模型刷新：`/Users/Zipper/Github/lingma/docs/lingma-analysis-token-flow.md`
+> - 总览入口：`../lingma-analysis-overview.md`
+> - 本地服务 / endpoint / 签名边界：`../lingma-analysis-endpoint-auth.md`
+> - token / 登录态 / 模型刷新：`../lingma-analysis-token-flow.md`
 
 # Lingma 分析快照归档
 
@@ -642,8 +642,8 @@
 - `/Users/Zipper/.Trash/lingma.log:8827`
 - `/Users/Zipper/.Trash/lingma.log:370213`
 - `/Users/Zipper/.Trash/lingma.log:370214`
-- `/Users/Zipper/Github/lingma/docs/lingma-analysis-endpoint-auth.md`
-- `/Users/Zipper/Github/lingma/docs/lingma-analysis-token-flow.md`
+- `../lingma-analysis-endpoint-auth.md`
+- `../lingma-analysis-token-flow.md`
 
 ### Token / Auth / Model Refresh
 
@@ -653,8 +653,8 @@
 
 证据锚点：
 
-- `/Users/Zipper/Github/lingma/docs/lingma-analysis-token-flow.md`
-- `/Users/Zipper/Github/lingma/docs/lingma-analysis-endpoint-auth.md`
+- `../lingma-analysis-token-flow.md`
+- `../lingma-analysis-endpoint-auth.md`
 
 ### Direct API Reuse
 

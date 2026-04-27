@@ -1,5 +1,7 @@
 # Lingma 逆向工程分析 - 最终状态总结
 
+> 目录入口请先看 `docs/README.md`。
+
 ## 分析日期
 2026-04-26 (更新)
 
@@ -70,4 +72,4 @@ AES-128-CBC, key=IV=machineKey[:16]
 - `lingma_remote_api.py` — **远端 API 完整直连客户端**（主要成果）
 - `lingma_client.py` — 本地 WebSocket 客户端（备用）
 - `docs/superpowers/specs/2026-04-26-lingma2api-design.md` — lingma2api Go 代理设计文档
-- `docs/encode1-complete-analysis.md` — Encode=1 算法详解
+- `docs/topics/encode1-complete-analysis.md` — Encode=1 算法详解
