@@ -48,59 +48,72 @@
 
 ## Bootstrap 说明
 
-当前设计采用“一次性本地回调授权 + 项目内落盘”方案。
+`cmd/lingma-auth-bootstrap` 是完整的一次性授权引导工具，负责生成 OAuth 链接、监听回调、交换 token、派生 Lingma 凭据，最终写出可被主服务直接使用的 `auth/credentials.json`。
 
-当前已提供 `cmd/lingma-auth-bootstrap` 骨架，可完成：
+### 完整授权流程
 
-1. 生成 OAuth 链接
-2. 捕获浏览器回调
-3. 将回调内容保存为项目内 artifact
+```bash
+cd lingma2api
+go run ./cmd/lingma-auth-bootstrap --output ./auth/credentials.json
+```
 
-当前尚未完成的部分：
+流程：
 
-1. 基于回调参数完成最终 token exchange
-2. 自动整理并写出可直接运行的 `auth/credentials.json`
+1. 自动生成 `machine_id` (用作 OAuth `client_id`)
+2. 生成 PKCE(state + verifier + challenge)
+3. 构造浏览器 OAuth 链接
+4. 在本地 `127.0.0.1:37510/callback` 启动一次性回调监听
+5. 用户在浏览器完成登录
+6. 捕获回调中的 `authorization_code`
+7. 向 Alibaba OAuth token endpoint 交换 `access_token` + `refresh_token` + `id_token`
+8. 从 `id_token` 解码 `user_id` 和 `username`
+9. 启动临时 Lingma 实例并通过 `auth/device_login` 同步凭据
+10. 从 Lingma 工作目录读取 `cosy_key`、`encrypt_user_info` 等
+11. 写入 `auth/credentials.json`
+12. 清理临时 Lingma 实例
 
-在 bootstrap 完整链路落地前，运行态不会尝试自动登录，也不会回退读取 `.lingma`。
+### 可选参数
+
+```
+--client-id        OAuth client_id (默认自动生成 UUID 格式 machine_id)
+--listen-addr      本地回调监听地址 (默认 127.0.0.1:37510)
+--redirect-url     显式回调 URL (默认 http://<listen-addr>/callback)
+--output           输出文件路径 (默认 ./auth/credentials.json)
+--lingma-bin       Lingma 二进制路径 (默认自动探测 ~/.lingma/bin/ 下最新版本)
+--use-lingma       使用本地 Lingma 完成凭据派生 (默认 true)
+--print-only       仅打印 OAuth 链接和 PKCE 参数，不执行完整流程
+```
+
+### 使用场景
+
+**场景 A：新机器首次授权** (无需本地 Lingma 缓存)
+
+```bash
+go run ./cmd/lingma-auth-bootstrap
+```
+
+**场景 B：仅获取 OAuth 链接** (调试/手动操作)
+
+```bash
+go run ./cmd/lingma-auth-bootstrap --print-only
+```
+
+**场景 C：指定 Lingma 二进制路径**
+
+```bash
+go run ./cmd/lingma-auth-bootstrap --lingma-bin /path/to/Lingma
+```
 
 ## 一次性迁移工具
 
-当前已提供可用的初始化命令：
+如果本机已有 Lingma 登录态（`~/.lingma/cache/user` 存在），可用一键迁移：
 
 ```bash
 cd lingma2api
 go run ./cmd/lingma-import-cache --lingma-dir ~/.lingma --output ./auth/credentials.json
 ```
 
-这个命令只用于一次性初始化：
-
-1. 读取本机 `~/.lingma/cache/user`
-2. 读取 `cache/id` 或 `lingma.log` 中的 machine id
-3. 生成项目内 `auth/credentials.json`
-
-它不改变主服务运行态边界。
-
-## 一次性 `client_id` 候选验证
-
-如果要复用仓库里已有的 [callback.html](/Users/Zipper/Github/lingma-analysis/callback.html) 线索，验证“`machine_id` 是否可作为 `client_id` 候选”，可运行：
-
-```bash
-cd lingma2api
-go run ./cmd/lingma-auth-bootstrap \
-  --seed-callback-html ../callback.html \
-  --use-machine-id-as-client-id \
-  --listen-addr 127.0.0.1:37510 \
-  --output ./auth/bootstrap-callback.json
-```
-
-这个命令当前会：
-
-1. 从 `callback.html` 提取 `machine_id` 和历史回调提示
-2. 用 `machine_id` 作为一次性 `client_id` 候选生成 OAuth URL
-3. 等待浏览器回调
-4. 将回调结果保存到 `auth/bootstrap-callback.json`
-
-它当前不会自动完成最终 token exchange。
+这个命令读取本机 Lingma 缓存文件并导出项目内认证文件，不改变主服务运行态边界。
 
 ## 启动
 

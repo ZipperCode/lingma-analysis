@@ -2,61 +2,36 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
 	"net/url"
-	"os"
-	"path/filepath"
 	"time"
 
 	"lingma2api/internal/auth"
+	"lingma2api/internal/proxy"
 )
-
-type callbackArtifact struct {
-	AuthorizeURL string               `json:"authorize_url"`
-	State        string               `json:"state"`
-	CodeVerifier string               `json:"code_verifier"`
-	Capture      auth.CallbackCapture `json:"capture"`
-}
 
 func main() {
 	var (
-		clientID             string
-		listenAddr           string
-		redirectURL          string
-		outputPath           string
-		printOnly            bool
-		seedCallbackHTML     string
-		useMachineIDAsClient bool
-		loginURL             string
+		clientID    string
+		listenAddr  string
+		redirectURL string
+		outputPath  string
+		printOnly   bool
+		lingmaBin   string
+		useLingma   bool
+		sessionKey  string
 	)
-
-	flag.StringVar(&clientID, "client-id", "", "OAuth client_id used to generate the authorize URL")
+	flag.StringVar(&clientID, "client-id", "", "OAuth client_id (defaults to auto-generated machine_id)")
 	flag.StringVar(&listenAddr, "listen-addr", "127.0.0.1:37510", "local callback listen address")
-	flag.StringVar(&redirectURL, "redirect-url", "", "explicit redirect URL; defaults to http://<listen-addr>/callback")
-	flag.StringVar(&outputPath, "output", "./auth/bootstrap-callback.json", "file to store callback capture artifact")
+	flag.StringVar(&redirectURL, "redirect-url", "", "explicit redirect URL (defaults to http://<listen-addr>/callback)")
+	flag.StringVar(&outputPath, "output", "./auth/credentials.json", "output credentials.json file")
 	flag.BoolVar(&printOnly, "print-only", false, "only print authorize URL and PKCE values")
-	flag.StringVar(&seedCallbackHTML, "seed-callback-html", "", "optional callback.html path used to preload machine_id and prior callback hints")
-	flag.BoolVar(&useMachineIDAsClient, "use-machine-id-as-client-id", false, "treat seeded machine_id as a one-time candidate client_id for validation")
-	flag.StringVar(&loginURL, "login-url", "", "use a pre-generated Lingma login URL instead of constructing an OAuth authorize URL")
+	flag.StringVar(&lingmaBin, "lingma-bin", "", "path to Lingma binary (auto-detect if empty)")
+	flag.BoolVar(&useLingma, "use-lingma", true, "use local Lingma binary to complete credential derivation")
+	flag.StringVar(&sessionKey, "session-key", "", "old Signature session_key for pure remote mode")
 	flag.Parse()
-
-	var hints auth.CallbackHTMLHints
-	if seedCallbackHTML != "" {
-		raw, err := os.ReadFile(seedCallbackHTML)
-		if err != nil {
-			log.Fatalf("read seed callback html: %v", err)
-		}
-		hints, err = auth.ParseCallbackHTMLHints(raw)
-		if err != nil {
-			log.Fatalf("parse seed callback html: %v", err)
-		}
-		if useMachineIDAsClient && clientID == "" {
-			clientID = hints.MachineID
-		}
-	}
 
 	if redirectURL == "" {
 		var err error
@@ -66,60 +41,28 @@ func main() {
 		}
 	}
 
-	authorizeURL := loginURL
-	state := ""
-	verifier := ""
-	if authorizeURL == "" {
-		var err error
-		authorizeURL, state, verifier, err = auth.BuildAuthorizeURL(auth.AuthorizeConfig{
-			ClientID:    clientID,
-			RedirectURL: redirectURL,
-		})
-		if err != nil {
-			log.Fatalf("build authorize url: %v", err)
-		}
-	} else {
-		var err error
-		authorizeURL, err = auth.RewriteLingmaLoginURLPort(authorizeURL, listenAddr)
-		if err != nil {
-			log.Fatalf("rewrite login url port: %v", err)
-		}
-		authorizeURL, err = auth.WrapLingmaLoginURLForBrowser(authorizeURL)
-		if err != nil {
-			log.Fatalf("wrap login url: %v", err)
-		}
-		parsed, err := url.Parse(authorizeURL)
-		if err != nil {
-			log.Fatalf("parse login url: %v", err)
-		}
-		state = parsed.Query().Get("state")
+	if clientID == "" {
+		clientID = auth.NewMachineID()
+		fmt.Printf("Auto-generated machine_id (used as client_id): %s\n", clientID)
+	}
+
+	authorizeURL, state, verifier, err := auth.BuildAuthorizeURL(auth.AuthorizeConfig{
+		ClientID:    clientID,
+		RedirectURL: redirectURL,
+	})
+	if err != nil {
+		log.Fatalf("build authorize url: %v", err)
 	}
 
 	fmt.Printf("Authorize URL:\n%s\n\n", authorizeURL)
-	if state != "" {
-		fmt.Printf("State: %s\n", state)
-	}
-	if verifier != "" {
-		fmt.Printf("Code verifier: %s\n", verifier)
-	}
-	if hints.MachineID != "" {
-		fmt.Printf("Seed machine_id: %s\n", hints.MachineID)
-	}
-	if hints.SecurityOAuthToken != "" {
-		fmt.Printf("Seed securityOauthToken: %s\n", maskValue(hints.SecurityOAuthToken, 10))
-	}
-	if useMachineIDAsClient {
-		fmt.Printf("Client ID candidate mode: machine_id -> client_id (%s)\n", clientID)
-	}
-	if loginURL != "" {
-		fmt.Println("Mode: using pre-generated Lingma login URL")
-	}
+	fmt.Printf("State: %s\n", state)
+	fmt.Printf("Code verifier: %s\n\n", verifier)
 
 	if printOnly {
 		return
 	}
 
-	fmt.Printf("\nOpen the URL in your browser, complete login, then wait for callback on %s.\n", redirectURL)
+	fmt.Printf("Open the URL in your browser, complete login, then wait for callback on %s.\n", redirectURL)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -129,30 +72,107 @@ func main() {
 		log.Fatalf("wait for callback: %v", err)
 	}
 
-	artifact := callbackArtifact{
-		AuthorizeURL: authorizeURL,
-		State:        state,
-		CodeVerifier: verifier,
-		Capture:      capture,
+	code := capture.Query.Get("code")
+	if code == "" {
+		log.Fatal("callback did not contain authorization code")
 	}
-	if err := saveArtifact(outputPath, artifact); err != nil {
-		log.Fatalf("save callback artifact: %v", err)
+	fmt.Printf("Captured authorization code.\n")
+
+	tokens, err := auth.ExchangeCodeForTokens(ctx, auth.TokenExchangeConfig{
+		Code:         code,
+		RedirectURL:  redirectURL,
+		ClientID:     clientID,
+		CodeVerifier: verifier,
+	})
+	if err != nil {
+		log.Fatalf("token exchange: %v", err)
+	}
+	fmt.Printf("Token exchange successful (access_token: %s...).\n", maskValue(tokens.AccessToken, 15))
+
+	userID := ""
+	username := ""
+	if tokens.IDToken != "" {
+		claims, err := auth.DecodeIDTokenClaims(tokens.IDToken)
+		if err != nil {
+			fmt.Printf("Warning: could not decode id_token: %v\n", err)
+		} else {
+			userID = claims.Sub
+			username = claims.Name
+			if username == "" {
+				username = claims.Email
+			}
+			fmt.Printf("ID token: sub=%s name=%s\n", userID, username)
+		}
 	}
 
-	fmt.Printf("\nCaptured callback and saved artifact to %s\n", outputPath)
-	fmt.Println("This artifact does not yet produce runtime credentials by itself; complete token exchange is still required.")
+	var stored proxy.StoredCredentialFile
+	if useLingma {
+		stored, err = deriveWithLingma(lingmaBin, tokens, clientID, userID, username)
+	} else {
+		expireMs := ""
+		if tokens.ExpiresIn > 0 {
+			expireMs = fmt.Sprintf("%d", time.Now().UnixMilli()+int64(tokens.ExpiresIn)*1000)
+		}
+		stored, err = auth.DeriveCredentialsRemotely(auth.RemoteLoginConfig{
+			AccessToken:   tokens.AccessToken,
+			RefreshToken:  tokens.RefreshToken,
+			UserID:        userID,
+			Username:      username,
+			MachineID:     clientID,
+			TokenExpireMs: expireMs,
+			SessionKey:    sessionKey,
+		})
+	}
+	if err != nil {
+		log.Fatalf("derive credentials: %v", err)
+	}
+
+	if userID != "" && stored.Auth.UserID == "" {
+		stored.Auth.UserID = userID
+	}
+	if stored.Auth.MachineID == "" {
+		stored.Auth.MachineID = clientID
+	}
+
+	if err := auth.SaveCredentialFile(outputPath, stored); err != nil {
+		log.Fatalf("save credentials: %v", err)
+	}
+
+	fmt.Printf("\nCredentials written to %s\n", outputPath)
+	fmt.Println("lingma2api is now ready to run with this credentials file.")
 }
 
-func saveArtifact(path string, payload callbackArtifact) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
+func deriveWithLingma(lingmaBin string, tokens auth.ExchangedTokens, machineID, userID, username string) (proxy.StoredCredentialFile, error) {
+	if lingmaBin == "" {
+		var err error
+		lingmaBin, err = auth.DefaultLingmaBinary()
+		if err != nil {
+			return proxy.StoredCredentialFile{}, fmt.Errorf("auto-detect Lingma binary failed; specify --lingma-bin or set --use-lingma=false: %w", err)
+		}
+		fmt.Printf("Detected Lingma binary: %s\n", lingmaBin)
 	}
-	data, err := json.MarshalIndent(payload, "", "  ")
-	if err != nil {
-		return err
+
+	expireMs := ""
+	if tokens.ExpiresIn > 0 {
+		expireMs = fmt.Sprintf("%d", time.Now().UnixMilli()+int64(tokens.ExpiresIn)*1000)
 	}
-	data = append(data, '\n')
-	return os.WriteFile(path, data, 0o600)
+
+	if userID == "" {
+		parsed, err := url.Parse(tokens.AccessToken)
+		if err == nil && parsed.Query().Get("sub") != "" {
+			userID = parsed.Query().Get("sub")
+		}
+	}
+
+	fmt.Println("Starting Lingma to sync credentials...")
+	return auth.DeriveCredentialsWithLingma(auth.LingmaBridgeConfig{
+		LingmaBinary:  lingmaBin,
+		AccessToken:   tokens.AccessToken,
+		RefreshToken:  tokens.RefreshToken,
+		UserID:        userID,
+		Username:      username,
+		TokenExpireMs: expireMs,
+	})
 }
 
 func maskValue(value string, keep int) string {
