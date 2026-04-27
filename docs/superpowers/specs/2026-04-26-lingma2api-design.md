@@ -1,67 +1,153 @@
-# lingma2api Design Spec
+# `lingma2api` 项目设计文档
 
-## Overview
+> 说明（2026-04-27）：
+> 本文中的运行态认证来源设计已被 [2026-04-27-lingma2api-project-auth-design.md](/Users/Zipper/Github/lingma-analysis/docs/plans/2026-04-27-lingma2api-project-auth-design.md) 取代。
+> 当前有效边界是：运行态只读取项目内认证文件，不再读取 `~/.lingma/*`。
 
-A Go-based proxy server that wraps the Lingma remote API behind an OpenAI-compatible interface. Enables Claude Code, Codex, OpenCode, and any OpenAI-compatible client to use Lingma models without the Lingma IDE plugin or local Lingma process.
+更新时间：`2026-04-27`
 
-**Chat API POST body is plain JSON** — no Encode=1, no template replay, no binary part needed. Full body construction from scratch is already working (see `lingma_remote_api.py`).
+## 1. 项目目标
 
-## Architecture
+`lingma2api` 是一个 Go 编写的代理服务，对外暴露最小 OpenAI 兼容接口，对内调用 Lingma 远端 HTTP/SSE 接口。
 
-```
-Client (OpenAI-compatible)
-        │
-        ▼  HTTP :8080
-┌───────────────────────────────────┐
-│           lingma2api              │
-│                                   │
-│  OpenAI API Handler               │
-│      ↓                            │
-│  Session Manager                  │
-│      ↓                            │
-│  Credential Manager               │
-│      ↓                            │
-│  Signature Engine                 │
-│      ↓                            │
-│  Lingma HTTP Client (utls + SSE) │
-└───────────────────────────────────┘
-        │
-        ▼  HTTPS (utls fingerprint)
-  lingma.alibabacloud.com
-  lingma-api.tongyi.aliyun.com
-```
+项目首期目标：
 
-Five core modules:
+1. 让 `Claude Code`、`Codex`、`OpenCode` 等 OpenAI 兼容客户端直接使用 Lingma 聊天模型。
+2. 运行时不依赖 Lingma plugin，也不依赖本地 Lingma 进程。
+3. 复用当前已经验证可工作的 Lingma 远端请求结构、签名链和 SSE 返回格式。
+4. 以最小可实现范围先交付稳定聊天代理，再逐步补齐增强能力。
 
-1. **OpenAI API Handler** — External interface layer
-2. **Session Manager** — Server-side conversation context, multi-turn history injection
-3. **Credential Manager** — Credential lifecycle (read, monitor, refresh)
-4. **Signature Engine** — Bearer COSY token generation
-5. **Lingma HTTP Client** — TLS-fingerprinted remote communication, JSON body construction
+## 2. 设计范围
 
-## API Surface
+### 2.1 首期范围
 
-### Public Endpoints
+首期只实现以下能力：
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/v1/chat/completions` | POST | Chat completions (streaming/non-streaming) |
-| `/v1/models` | GET | Available model list |
+1. `POST /v1/chat/completions`
+2. `GET /v1/models`
+3. 凭据加载与热重读
+4. 服务端会话管理
+5. 远端 SSE 转 OpenAI SSE
+6. 最小管理接口
 
-### Admin Endpoints
+### 2.2 非目标
 
-Protected by `admin_token` in config (simple Bearer auth). Only enforced when `admin_token` is non-empty. Default bind to `127.0.0.1` limits exposure, but token is recommended if binding to `0.0.0.0`.
+首期明确不做：
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/admin/status` | GET | Credential status, expiry, session count |
-| `/admin/refresh` | POST | Manually re-read credentials from cache/user |
-| `/admin/sessions` | GET | List active sessions |
-| `/admin/sessions/{id}` | DELETE | Remove a specific session |
+1. 独立 OAuth 登录、PKCE、token 刷新
+2. OpenAI `tool_calls` 与 Lingma 私有 agent/tool 协议桥接
+3. 图片、多模态、embedding、代码库索引等扩展能力
+4. 国内站与国际站双栈自动切换
+5. 多租户、多用户强隔离
 
-### Request Format
+## 3. 设计输入与前置假设
 
-Standard OpenAI chat completion:
+本设计基于当前已验证事实，但这里不展开分析过程，只保留实现会直接依赖的前提：
+
+1. 远端模型列表接口可用：
+   - `GET /algo/api/v2/model/list`
+2. 远端聊天接口可用：
+   - `POST /algo/api/v2/service/pro/sse/agent_chat_generation`
+3. Chat body 直接发送原始 JSON，不需要 `Encode=1`。
+4. 远端鉴权依赖 COSY Bearer 和 `Cosy-*` 请求头。
+5. 当前可行的凭据来源是：
+   - 显式注入
+   - 环境变量
+   - 便携配置
+   - `cache/user + cache/id`
+6. 当前没有证据支持“首期即可独立实现 OAuth 登录刷新”，因此该能力不纳入设计边界。
+
+实现时若需回看证据，参考：
+
+- [lingma_remote_api.py](/Users/Zipper/Github/lingma-analysis/lingma_remote_api.py)
+- [lingma_client.py](/Users/Zipper/Github/lingma-analysis/lingma_client.py)
+- [docs/remote-api-direct-connection.md](/Users/Zipper/Github/lingma-analysis/docs/remote-api-direct-connection.md)
+- [docs/lingma-analysis-overview.md](/Users/Zipper/Github/lingma-analysis/docs/lingma-analysis-overview.md)
+
+## 4. 成功标准
+
+首期完成的判定标准：
+
+1. 代理服务可在未启动本地 Lingma 进程时正常工作。
+2. 代理服务可用有效凭据返回 Lingma 模型列表。
+3. 代理服务可完成流式和非流式聊天。
+4. OpenAI 客户端可通过 `model` 和 `messages` 发起请求，不需要了解 Lingma 私有 body 结构。
+5. 会话模式下，代理可持续维护多轮上下文。
+6. 错误能准确区分为：
+   - 凭据问题
+   - 模型问题
+   - 远端连接问题
+   - SSE 中断问题
+
+## 5. 设计原则
+
+### 5.1 运行时独立，凭据引导不独立
+
+本项目追求的是“代理运行时独立”，不是“首次授权链独立”。
+
+这意味着：
+
+1. 代理运行时不需要 plugin。
+2. 代理运行时不需要本地 Lingma 进程。
+3. 代理仍然允许依赖一次性凭据导出或本地缓存材料。
+
+### 5.2 最小兼容优先
+
+OpenAI 兼容层只覆盖当前后续接入真正需要的最小子集，不主动过度模拟全部 OpenAI 能力。
+
+### 5.3 先稳定，再原生优化
+
+首期先实现稳定可用版本，再考虑替换传输层或扩展协议能力。不能为了“更原生”牺牲首期可交付性。
+
+### 5.4 未验证能力不写进首期实现承诺
+
+凡是当前仓库还没有验证成功的链路，只能作为后续增强，不应写成首期必做项。
+
+## 6. 用户与使用场景
+
+### 6.1 目标用户
+
+1. 使用 OpenAI 兼容接口的本地开发工具
+2. 需要以服务化方式复用 Lingma 模型能力的脚本或客户端
+3. 后续要在新项目里集成 Lingma 能力的开发者
+
+### 6.2 核心场景
+
+#### 场景 A：列出模型
+
+客户端调用 `/v1/models`，代理拉取或返回缓存的 Lingma 模型列表。
+
+#### 场景 B：单轮聊天
+
+客户端调用 `/v1/chat/completions`，代理将 OpenAI 风格消息转换为 Lingma Chat body，向远端发起请求并返回结果。
+
+#### 场景 C：多轮聊天
+
+客户端通过 `session_id` 绑定上下文，代理维护历史消息，并在每次请求时构造完整远端 `messages`。
+
+#### 场景 D：凭据热更新
+
+管理员更新凭据来源后，调用 `/admin/refresh`，代理重新加载凭据并刷新模型表。
+
+## 7. 外部接口设计
+
+### 7.1 `POST /v1/chat/completions`
+
+#### 请求子集
+
+首期接受以下字段：
+
+- `model`
+- `messages`
+- `stream`
+- `temperature`
+- `extra_body.session_id`
+
+同时支持请求头：
+
+- `X-Session-Id`
+
+请求示例：
 
 ```json
 {
@@ -70,243 +156,485 @@ Standard OpenAI chat completion:
     {"role": "system", "content": "You are a helpful assistant."},
     {"role": "user", "content": "Hello"}
   ],
-  "stream": true
+  "stream": true,
+  "temperature": 0.1
 }
 ```
 
-Session binding via `X-Session-Id` header or `extra_body.session_id`.
+#### 行为规则
 
-### Model Mapping
+1. `messages` 是唯一可信对话输入。
+2. `session_id` 只影响代理侧历史拼装，不直接透传为 Lingma 的长期会话机制。
+3. 当 `stream=false` 时，代理消费完整 SSE 后返回标准非流式 OpenAI 响应。
+4. 当 `stream=true` 时，代理逐块转发 OpenAI SSE。
 
-| OpenAI-style Name | Lingma Internal Key |
-|--------------------|---------------------|
+#### 首期不支持
+
+- `tool_calls`
+- `parallel_tool_calls`
+- `response_format`
+- 图片输入
+- OpenAI Responses API 语义
+
+### 7.2 `GET /v1/models`
+
+#### 目标
+
+返回当前代理可用的模型集合。
+
+#### 数据优先级
+
+1. 最近一次成功拉取的远端模型表
+2. 内存缓存
+3. 静态兜底别名表
+
+### 7.3 管理接口
+
+首期保留：
+
+- `GET /admin/status`
+- `POST /admin/refresh`
+- `GET /admin/sessions`
+- `DELETE /admin/sessions/{id}`
+
+#### 管理接口语义
+
+1. `/admin/status`
+   - 查看当前凭据加载状态、模型表状态、会话数量
+2. `/admin/refresh`
+   - 重新读取凭据源
+   - 重新刷新模型表
+3. `/admin/sessions`
+   - 查看活跃会话摘要
+4. `/admin/sessions/{id}`
+   - 删除指定会话
+
+注意：
+
+- `/admin/refresh` 不是 OAuth refresh 接口
+
+## 8. 端到端请求流程
+
+### 8.1 聊天请求流程
+
+```text
+Client
+  -> POST /v1/chat/completions
+  -> API Handler 校验输入
+  -> Session Manager 合并历史消息
+  -> Model Mapper 解析模型 key
+  -> Credential Manager 读取当前凭据
+  -> Signature Engine 生成 Bearer 和 Cosy-* 头
+  -> Lingma Transport 发起远端 SSE
+  -> SSE Parser 转换为 OpenAI 格式
+  -> 返回给 Client
+```
+
+### 8.2 模型列表流程
+
+```text
+Client
+  -> GET /v1/models
+  -> API Handler
+  -> Credential Manager
+  -> Signature Engine
+  -> Lingma Transport 请求远端模型表
+  -> Model Mapper 标准化输出
+  -> 返回给 Client
+```
+
+## 9. 核心模块设计
+
+### 9.1 API Handler
+
+职责：
+
+1. 提供 HTTP 路由
+2. 解析 OpenAI 风格请求
+3. 做参数校验与错误映射
+4. 组织流式与非流式响应
+
+输出边界：
+
+1. 不直接关心凭据来源细节
+2. 不直接关心 Bearer 计算细节
+3. 不直接关心远端 SSE 原始结构
+
+### 9.2 Session Manager
+
+职责：
+
+1. 维护 `session_id -> message history`
+2. 支持无状态和有状态两种模式
+3. 定时清理超时会话
+
+数据结构建议：
+
+```text
+Session {
+  id: string
+  messages: []Message
+  updated_at: time.Time
+}
+```
+
+规则：
+
+1. 如果没有 `session_id`，只使用当前请求 `messages`
+2. 如果有 `session_id`，按顺序追加并构造完整远端 `messages`
+3. TTL 默认 `30` 分钟
+
+### 9.3 Model Mapper
+
+职责：
+
+1. 维护别名到远端 key 的映射
+2. 处理默认模型语义
+3. 标准化 `/v1/models` 输出
+
+关键规则：
+
+1. 如果客户端传入远端已知 key，直接透传
+2. 如果传入代理别名，转换成远端 key
+3. 如果传入 `auto` 或空值，转换成 `model_config.key = ""`
+4. 如果模型未知，返回 `400`
+
+首期内置别名建议：
+
+| 外部模型名 | 远端 key |
+|---|---|
 | `qwen3-coder` | `dashscope_qwen3_coder` |
 | `qwen3-coder-default` | `dashscope_qwen3_coder_default` |
 | `qwen-plus-thinking` | `dashscope_qwen_plus_20250428_thinking` |
 | `qwen-max` | `dashscope_qwen_max_latest` |
-| `auto` | `auto` |
+| `auto` | `""` |
 
-Model list is dynamically fetched from `GET /algo/api/v2/model/list` on startup and cached. Dynamic models are preferred; the static mapping table above serves as fallback when the remote fetch fails. New models returned by the remote API are auto-mapped: underscores and `dashscope_` prefix are stripped, remaining segments are joined with `-`.
+### 9.4 Credential Manager
 
-## Module Details
+职责：
 
-### 1. OpenAI API Handler
+1. 从多种来源加载凭据
+2. 解密 `cache/user`
+3. 提供线程安全的当前凭据快照
+4. 支持热重载
 
-Accepts standard OpenAI requests, converts to internal representation, dispatches to Session Manager, and converts Lingma SSE responses back to OpenAI SSE format.
+来源优先级：
 
-**Streaming response conversion:**
+1. `config.yaml` 显式字段
+2. 环境变量
+3. `portable_config.json`
+4. `cache/user + cache/id`
 
-Lingma SSE:
-```
-data: {"body": "{\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}"}
-```
+环境变量：
 
-Converted to OpenAI SSE:
-```
-data: {"id":"chatcmpl-xxx","object":"chat.completion.chunk","choices":[{"delta":{"content":"Hello"}}]}
-```
+- `LINGMA_COSY_KEY`
+- `LINGMA_ENCRYPT_USER_INFO`
+- `LINGMA_USER_ID`
+- `LINGMA_MACHINE_ID`
 
-### 2. Session Manager
+缓存解密规则：
 
-Full conversation context is injected into the messages array of each Lingma request. The Session Manager:
-
-- Stores server-side conversation history per `session_id` (UUID)
-- Accumulates messages across turns (system, user, assistant)
-- Injects full history into the Lingma POST body's `messages` array on each request
-- Supports stateless fallback (single `session_id` per request, no lookup)
-- Auto-cleanup after 30 minutes of inactivity (configurable)
-- Thread-safe with `sync.RWMutex`
-
-Since the Lingma body is plain JSON freely constructed, multi-turn conversation works by simply appending all prior messages to the `messages` array — no template or binary constraints.
-
-### 3. Credential Manager
-
-**Source priority:**
-1. Config file (`config.yaml`) explicit fields
-2. Environment variables (`LINGMA_COSY_KEY`, `LINGMA_ENCRYPT_USER_INFO`, `LINGMA_USER_ID`, `LINGMA_MACHINE_ID`)
-3. Portable config file (`~/.lingma/portable_config.json`)
-4. Local Lingma cache (`~/.lingma/cache/user` + `~/.lingma/cache/id`)
-
-This enables **complete independence from local Lingma** — credentials can be extracted once and used anywhere.
-
-**Decryption (仅方式 4 需要):**
-```
+```text
 machineKey = read(cache/id)
-aesKey = machineKey[:16]   // first 16 ASCII bytes
-iv = aesKey                // key == iv
+aesKey = machineKey[:16]
+iv = aesKey
 plaintext = AES-128-CBC.decrypt(base64decode(cache/user), aesKey, iv)
-strip PKCS7 padding
-parse JSON → CosyUserInfo (20 fields)
 ```
 
-**Key fields extracted:**
-- `key` (172 chars) → `Cosy-Key` header
-- `encrypt_user_info` (664 chars) → `Authorization.info`
-- `uid` → `Cosy-User` header
-- `security_oauth_token` → stored for future use
-- `refresh_token` → stored for future use
-- `expire_time` → expiry monitoring (int64 millis timestamp)
+首期只提取这些字段：
 
-**重要:** `cosy_key` 和 `encrypt_user_info` **不在** `auth/report` WebSocket 推送中（推送仅含 OAuth token 和用户元信息）。COSY 凭据在初始 OAuth 登录时由 Lingma 后端返回并直接写入 `cache/user`，之后仅通过解密缓存文件获取。
+- `key`
+- `encrypt_user_info`
+- `uid`
+- `machine_id`
 
-**Token Refresh — 现状分析 (Frida 实时抓包确认):**
+### 9.5 Signature Engine
 
-**`auth/refreshToken` 角色澄清:**
-- `auth/refreshToken` 是 **LSP WebSocket 协议层接口**（IDE 插件 ↔ 本地 Lingma 进程通信）
-- 它**不是** Lingma 程序的完整刷新逻辑 —— 它是本地 LSP 封装层
-- Frida 实时抓包：调用期间无任何远程网络活动（零 DNS/connect/TLS）
-- 输入参数原样返回 (`securityOauthToken` + `refreshToken` + `expireTime`)，不做远端刷新
-- **实际结论:** 本地 Lingma 进程中 COSY 凭据长期有效；OAuth token 刷新走的是 LSP 协议的本地缓存路径，不是远程 API
+职责：
 
-**实际不需要 OAuth token 刷新**：
-- Chat API 使用 COSY Bearer 签名认证（`cosy_key` + `encrypt_user_info`）
-- COSY 凭据来自 `cache/user` 解密后，持久有效
-- OAuth token（`security_oauth_token`/`refresh_token`）仅用于 IDE 插件与本地 Lingma 进程之间的 LSP 会话认证
-- `lingma_remote_api.py` 已证实仅凭 COSY 凭据即可无限次调用 Chat API
+1. 生成 Bearer payload
+2. 生成 MD5 签名
+3. 生成完整 `Cosy-*` 请求头
 
-**远端 token 刷新端点状态：**
-- 国际服：`/algo/api/v3/user/refresh_token` → **404**（未部署）
-- 国内服：`/algo/api/v3/user/refresh_token` → **403**（WAF/ALB 拦截，真实 Lingma 进程也不走此端点）
+Bearer 结构：
 
-**Lifecycle:**
-- COSY 凭据无需刷新，`cache/user` 解密后长期有效
-- `/admin/refresh` 仅用于重新读取 `cache/user` 文件（如 VS Code 插件更新了凭据）
+```text
+COSY.<base64_payload>.<md5_signature>
+```
 
-### 4. Signature Engine
+payload：
 
-**Bearer structure:** `COSY.<base64_payload>.<32hex_signature>`
-
-**Payload:**
 ```json
 {
   "cosyVersion": "2.11.2",
   "ideVersion": "",
   "info": "<encrypt_user_info>",
-  "requestId": "<new-uuid-per-request>",
+  "requestId": "<uuid>",
   "version": "v1"
 }
 ```
 
-**Signature formula:**
-```
+签名公式：
+
+```text
 normalized_path = strip "/algo" prefix from path
-preimage = base64(payload) + "\n" + cosy_key + "\n" + unix_timestamp + "\n" + slot4 + "\n" + normalized_path
+preimage =
+  base64(payload) + "\n" +
+  cosy_key + "\n" +
+  unix_timestamp + "\n" +
+  slot4 + "\n" +
+  normalized_path
 signature = md5(preimage).hex()
 ```
 
-- GET: `slot4 = ""`
-- POST: `slot4 = full_http_body`
+其中：
 
-**Required headers per request:**
+1. `GET` 请求 `slot4 = ""`
+2. `POST` 请求 `slot4 = 原始 JSON body`
+
+### 9.6 Lingma Transport
+
+职责：
+
+1. 发送远端 HTTP 请求
+2. 支持 SSE 流式读取
+3. 为上层提供统一 transport 接口
+
+传输层分两阶段：
+
+#### Phase 1：`curl bridge`
+
+首期使用 `curl` 子进程作为远端传输实现。
+
+原因：
+
+1. 当前仓库已有稳定验证样本
+2. 能规避首期 TLS 指纹不确定性
+3. 实现成本最低
+
+#### Phase 2：Go 原生 `utls`
+
+在首期稳定后，再补原生实现：
+
+1. `utls` 连接池
+2. 原生 SSE 解析
+3. 更细粒度重试、超时、连接复用
+
+### 9.7 关键内部接口
+
+为了避免实现阶段再次发散，建议从一开始就把内部边界固定成接口，而不是让 `handler` 直接依赖具体实现。
+
+建议接口草图：
+
+```go
+type SessionStore interface {
+    BuildMessages(ctx context.Context, sessionID string, incoming []Message) ([]Message, error)
+    Delete(ctx context.Context, sessionID string) error
+    List(ctx context.Context) ([]SessionState, error)
+    SweepExpired(ctx context.Context) error
+}
+
+type CredentialProvider interface {
+    Current(ctx context.Context) (CredentialSnapshot, error)
+    Refresh(ctx context.Context) (CredentialSnapshot, error)
+}
+
+type ModelResolver interface {
+    ResolveChatModel(ctx context.Context, requested string) (string, error)
+    ListModels(ctx context.Context) ([]OpenAIModel, error)
+    Refresh(ctx context.Context) error
+}
+
+type Transport interface {
+    ListModels(ctx context.Context, cred CredentialSnapshot) ([]RemoteModel, error)
+    StreamChat(ctx context.Context, req RemoteChatRequest, cred CredentialSnapshot) (ChatStream, error)
+}
 ```
+
+设计要求：
+
+1. `API Handler` 只依赖这些接口
+2. `curl bridge` 和后续 `utls` 实现共用同一个 `Transport` 接口
+3. `ModelResolver` 负责 `auto -> ""` 以及别名解析
+4. `CredentialProvider` 只返回脱敏后的结构体快照，不暴露原始文件处理逻辑给上层
+
+## 10. 远端请求契约
+
+### 10.1 远端端点
+
+- 模型列表：
+  - `GET /algo/api/v2/model/list`
+- 聊天：
+  - `POST /algo/api/v2/service/pro/sse/agent_chat_generation?FetchKeys=llm_model_result&AgentId=agent_common`
+
+### 10.2 关键请求头
+
+```text
 Authorization: Bearer COSY.<payload>.<signature>
 Cosy-Date: <unix_timestamp>
-Cosy-Key: <from cache/user.key>
-Cosy-User: <from cache/user.uid>
-Cosy-Machineid: <from cache/id>
+Cosy-Key: <key>
+Cosy-User: <uid>
+Cosy-Machineid: <machine_id>
 Cosy-Clientip: 198.18.0.1
 Cosy-Clienttype: 2
 Cosy-Machineos: x86_64_windows
-Cosy-Machinetoken: <empty>
-Cosy-Machinetype: <empty>
+Cosy-Machinetoken: ""
+Cosy-Machinetype: ""
 Cosy-Version: 2.11.2
 Appcode: cosy
 Login-Version: v2
 User-Agent: Go-http-client/1.1
 ```
 
-### 5. Lingma HTTP Client
+### 10.3 Chat body 设计
 
-**TLS fingerprint:** Uses `github.com/refraction-networking/utls` to present a Chrome TLS fingerprint. Python `requests` is rejected; `curl` works; utls Chrome preset should work.
+远端 Chat body 由代理完整构造，不依赖调用方提供 Lingma 私有字段。
 
-**Remote endpoints:**
-- Model list: `GET https://lingma.alibabacloud.com/algo/api/v2/model/list`
-- Chat: `POST https://lingma.alibabacloud.com/algo/api/v2/service/pro/sse/agent_chat_generation?FetchKeys=llm_model_result&AgentId=agent_common`
+设计要求：
 
-**Chat body construction (plain JSON — no encoding):**
+1. `messages` 由代理根据 OpenAI 请求生成
+2. `model_config.key` 由 `Model Mapper` 生成
+3. 保留当前已验证稳定字段，如：
+   - `request_id`
+   - `chat_record_id`
+   - `stream`
+   - `parameters`
+   - `agent_id`
+   - `task_id`
+   - `business`
+4. 首期不要主动删减那些已知稳定、但短期内没有成本收益的字段
 
-The POST body is standard JSON built from scratch. No Encode=1, no template replay, no binary part.
+实现基线直接对齐：
 
-```json
-{
-  "request_id": "<uuid>",
-  "request_set_id": "",
-  "chat_record_id": "<same-uuid>",
-  "stream": true,
-  "image_urls": null,
-  "is_reply": false,
-  "is_retry": false,
-  "session_id": "",
-  "code_language": "",
-  "source": 0,
-  "version": "3",
-  "chat_prompt": "",
-  "parameters": {"temperature": 0.1},
-  "aliyun_user_type": "personal_standard",
-  "agent_id": "agent_common",
-  "task_id": "question_refine",
-  "model_config": {
-    "key": "<model_key or empty for auto>",
-    "display_name": "", "model": "", "format": "",
-    "is_vl": false, "is_reasoning": false, "api_key": "", "url": "",
-    "source": "", "max_input_tokens": 0, "enable": false,
-    "price_factor": 0, "original_price_factor": 0,
-    "is_default": false, "is_new": false,
-    "exclude_tags": null, "tags": null, "icon": null, "strategies": null
-  },
-  "messages": [
-    {"role": "system", "content": "<system_prompt>", "response_meta": {...}, "reasoning_content_signature": ""},
-    {"role": "user", "content": "<user_message>", "response_meta": {...}, "reasoning_content_signature": ""}
-  ],
-  "business": {
-    "product": "jb_plugin",
-    "version": "2.11.2",
-    "type": "memory",
-    "id": "<uuid>",
-    "begin_at": <unix_millis>,
-    "stage": "start",
-    "name": "memory_intent_recognition_<request_id>"
-  }
+- [lingma_remote_api.py](/Users/Zipper/Github/lingma-analysis/lingma_remote_api.py:230)
+
+### 10.4 SSE 解析设计
+
+远端 SSE 解析流程：
+
+1. 逐行读取 `data:`
+2. 解析外层 JSON：
+   - `{"body":"<inner-json>","statusCodeValue":200}`
+3. 过滤 `[DONE]`
+4. 解析内层 JSON
+5. 抽取 `choices[].delta.content`
+6. 输出 OpenAI 兼容 SSE chunk
+
+## 11. 数据模型
+
+### 11.1 内部消息模型
+
+```text
+Message {
+  role: "system" | "user" | "assistant"
+  content: string
 }
 ```
 
-Key points:
-- `messages` array freely constructed — arbitrary content, no byte budget
-- Multi-turn: append prior assistant/user turns to `messages`
-- `model_config.key`: empty string = auto model selection
-- `response_meta` and `reasoning_content_signature` use fixed empty/zero values
-- `business.id`, `business.begin_at`, `business.name` are per-request unique
+### 11.2 凭据模型
 
-**Reference implementation:** `lingma_remote_api.py:_build_chat_body()`
+```text
+CredentialSnapshot {
+  cosy_key: string
+  encrypt_user_info: string
+  user_id: string
+  machine_id: string
+  source: string
+  loaded_at: time.Time
+}
+```
 
-**SSE parsing:**
-- Read `data:` lines from response stream
-- Parse outer JSON: `{"body": "<inner JSON>", "statusCodeValue": 200}`
-- Skip `[DONE]` body
-- Parse inner JSON: standard OpenAI-format chat completion chunk
-- Extract `choices[].delta.content`
-- Forward as OpenAI-format SSE chunks
-- Final event: `event:finish` with timing metadata
+### 11.3 模型注册表模型
 
-**Encode=1 codec** (retained for other endpoints that may need it):
-- Custom base64 alphabet: `_doRTgHZBKcGVjlvpC,@aFSx#DPuNJme&i*MzLOEn)sUrthbf%Y^w.(kIQyXqWA!`
-- Algorithm: custom base64 → 3-block reversal → $ padding
-- Not used by Chat API; may be needed for login/heartbeat endpoints
-- Implemented in `lingma_remote_api.py:lingma_encode()/lingma_decode()`
+```text
+ModelRegistry {
+  fetched_at: time.Time
+  models_by_key: map[string]RemoteModel
+  alias_to_key: map[string]string
+}
+```
 
-## Configuration
+### 11.4 会话模型
 
-`config.yaml`:
+```text
+SessionState {
+  id: string
+  messages: []Message
+  updated_at: time.Time
+}
+```
+
+### 11.5 远端聊天请求模型
+
+实现层建议在内部显式定义 `RemoteChatRequest`，避免在多个模块里散落拼 JSON 的逻辑。
+
+```text
+RemoteChatRequest {
+  path: string
+  query: string
+  body_json: string
+  request_id: string
+  model_key: string
+}
+```
+
+## 12. 错误处理设计
+
+错误必须能帮助调用方定位问题来源，不能只返回“请求失败”。
+
+建议最小映射：
+
+| 场景 | 代理返回 |
+|---|---|
+| 凭据缺失 | `500` |
+| 凭据解密失败 | `500` |
+| 模型未知 | `400` |
+| 上游鉴权失败 | `401` 或 `502` |
+| TLS / 网络失败 | `502` |
+| SSE 中途断流 | 流式终止并输出错误结束块，或非流式返回 `502` |
+| 模型表拉取失败 | 使用旧缓存并记录错误 |
+
+禁止行为：
+
+1. 模型未知时静默切到默认模型
+2. 凭据失效时返回模糊“无响应”
+3. SSE 被截断时假装成功完成
+
+## 13. 可观测性设计
+
+首期至少记录：
+
+1. 请求 ID
+2. 远端路径
+3. 选中的模型 key
+4. 凭据来源
+5. 会话 ID
+6. 请求耗时
+7. 远端状态码或错误摘要
+
+日志中禁止输出：
+
+1. 完整 `cosy_key`
+2. 完整 `encrypt_user_info`
+3. 完整 Bearer token
+
+## 14. 配置设计
+
+建议最小配置：
+
 ```yaml
 server:
   host: "127.0.0.1"
   port: 8080
-  admin_token: ""         # Bearer token for /admin/* endpoints; empty = no auth
+  admin_token: ""
 
 credential:
-  lingma_dir: ""          # default: ~/.lingma
-  cache_dir: ""           # override: direct path to cache/
-  # Future: explicit key/info fields
+  cosy_key: ""
+  encrypt_user_info: ""
+  user_id: ""
+  machine_id: ""
+  lingma_dir: ""
+  portable_config: ""
 
 session:
   ttl_minutes: 30
@@ -315,398 +643,136 @@ session:
 lingma:
   base_url: "https://lingma.alibabacloud.com"
   cosy_version: "2.11.2"
+  transport: "curl"
 ```
 
-Environment variable overrides:
-- `LINGMA_LISTEN` — `host:port`
-- `LINGMA_CACHE_DIR` — path to cache directory
+配置原则：
 
-## Project Structure
+1. 显式字段优先，便于容器部署
+2. `transport` 可切换，便于后续引入 `utls`
 
-```
+## 15. 项目结构建议
+
+```text
 lingma2api/
 ├── main.go
 ├── go.mod
-├── go.sum
 ├── config.yaml
 ├── internal/
 │   ├── api/
-│   │   ├── handler.go        // OpenAI API handler
-│   │   ├── models.go         // /v1/models
-│   │   ├── chat.go           // /v1/chat/completions
-│   │   └── admin.go          // /admin/* endpoints
-│   ├── session/
-│   │   └── manager.go        // Session Manager
+│   │   ├── chat.go
+│   │   ├── models.go
+│   │   └── admin.go
+│   ├── config/
+│   │   └── config.go
 │   ├── credential/
-│   │   └── manager.go        // Credential Manager + AES decrypt
+│   │   └── manager.go
+│   ├── session/
+│   │   └── manager.go
+│   ├── modelmap/
+│   │   └── mapper.go
 │   ├── signature/
-│   │   └── engine.go         // Bearer COSY signature
-│   ├── lingma/
-│   │   ├── client.go         // Lingma HTTP client (utls)
-│   │   ├── codec.go          // Custom base64 codec (for non-chat endpoints)
-│   │   ├── sse.go            // SSE parser
-│   │   └── body.go           // Chat body JSON constructor
-│   └── config/
-│       └── config.go         // Configuration loading
+│   │   └── engine.go
+│   └── lingma/
+│       ├── client.go
+│       ├── transport.go
+│       ├── body.go
+│       └── sse.go
 └── README.md
 ```
 
-## OAuth 登录/刷新流程 (2026-04-26 分析)
-
-### 脱离本地环境 — 凭据引导方案
-
-**核心发现:** `cosy_key` 和 `encrypt_user_info` **不在** `auth/report` WebSocket 推送中，仅存储在 `cache/user` 文件。这些 COSY 凭据长期有效，可用于完全脱离 Lingma 本地程序。
-
-**引导流程:**
-
-```
-机器 A (有 Lingma)                          机器 B (无 Lingma)
-─────────────────                          ─────────────────
-1. 启动 Lingma
-2. credential_extractor.py
-   → 读取 cache/id + cache/user
-   → AES-128-CBC 解密
-   → 导出 cosy_key + encrypt_user_info
-3. portable_config.json                 ──→  复制到机器 B
-       或 环境变量                           或设置 ENV VARs
-                                            LingmaRemoteAPI(config_file=...)
-                                                    ↓
-                                            Chat API 直连 ✓
-```
-
-**三种凭据获取方式:**
-
-| 方式 | 脚本 | 适用场景 |
-|------|------|---------|
-| 便携导出 | `tools/credential_extractor.py` | **推荐** — 从现有 Lingma 导出凭据 |
-| 回调拦截 | `tools/oauth_callback_intercept.py --standalone` | 干净引导 — 拦截 OAuth 回调获取凭据 |
-| 流分析 | `tools/oauth_callback_intercept.py --analyze-only` | 仅分析 — 观察登录流程不拦截 |
-
-**`LingmaRemoteAPI` 凭据加载优先级:**
-1. 直接构造函数参数 (`cosy_key=`, `encrypt_user_info=`)
-2. 环境变量 (`LINGMA_COSY_KEY`, `LINGMA_ENCRYPT_USER_INFO`, `LINGMA_USER_ID`, `LINGMA_MACHINE_ID`)
-3. 便携配置文件 (`~/.lingma/portable_config.json`)
-4. 本地 Lingma 缓存 (`cache/user` + `cache/id`，需安装 Lingma)
-
-**OAuth 回调拦截原理:**
-
-```
-auth/login (WebSocket) → login URL
-    ↓
-https://lingma.alibabacloud.com/lingma/login
-    ?nonce={nonce}&port=37510
-    &state=2-{nonce}        ← 2- 表示已登录; 1- 表示需认证
-    &challenge={pkce_S256}
-    &challenge_method=S256
-    &machine_id={id}
-    ↓
-OAuth Provider (signin.alibabacloud.com)
-    ↓ 用户认证后
-redirect → http://localhost:37510?code={auth_code}&state={state}
-    ↓
-Lingma 本地服务器接收 code → 交换令牌
-    ↓
-Lingma 后端返回凭据 → 写入 cache/user (AES-128-CBC 加密)
-    ↓
-auth/report 推送 → 仅含 OAuth token，**不含** cosy_key
-```
-
-关键约束：OAuth 回调拦截可获取 `authorization_code`，但**直接交换令牌需要 `client_id`**（服务器端密钥，不在本地 binary）。因此：
-- 拦截脚本 `--standalone` 模式可捕获回调，但无法独立完成凭据获取
-- **推荐方案**：使用 `credential_extractor.py` 一次导出，后续完全脱离 Lingma
-
-### 完整 OAuth 流程
-
-Lingma 使用 **PKCE (Proof Key for Code Exchange) + OIDC** 认证：
-
-```
-1. IDE 触发 LSP auth/login
-2. 本地 Lingma 生成 PKCE code_verifier + code_challenge (S256)
-3. 构建登录 URL: https://lingma.alibabacloud.com/lingma/login
-      ?state=2-{nonce}
-      &challenge={code_challenge}
-      &challenge_method=S256
-      &machine_id={from cache/id}
-      &nonce={nonce}
-      &port=37510
-4. 重定向到: https://account.alibabacloud.com/login/login.htm
-      ?oauth_callback=https://lingma.alibabacloud.com/lingma/login?...
-5. 用户登录 Alibaba 账号
-6. 授权后跳转到: https://signin.alibabacloud.com/oauth2/v1/auth
-      ?client_id=XXX (服务器端)
-      &response_type=code
-      &scope=openid+aliuid+profile
-      &code_challenge={challenge}
-      &code_challenge_method=S256
-      &redirect_uri={lingma_server_callback}
-      &state={state}
-7. 授权码通过 localhost:37510 (本地回调服务器) 返回
-8. 授权码交换为 token (服务器端或本地)
-9. 结果存入 ~/.lingma/cache/user (AES-128-CBC 加密)
-
-### OAuth 端点 (OIDC Discovery)
-
-**国际站:**
-- Discovery: https://oauth.alibabacloud.com/.well-known/openid-configuration
-- Authorization: https://signin.alibabacloud.com/oauth2/v1/auth
-- Token: https://oauth.alibabacloud.com/v1/token
-- Revoke: https://oauth.alibabacloud.com/v1/revoke
-- UserInfo: https://oauth.alibabacloud.com/v1/userinfo
-
-**国内站:**
-- Discovery: https://oauth.aliyun.com/.well-known/openid-configuration
-- Authorization: https://signin.aliyun.com/oauth2/v1/auth
-- Token: https://oauth.aliyun.com/v1/token
-
-### Token 刷新
-
-- **本地路径 (可用):** WebSocket `auth/refreshToken` (LSP)，参数 `securityOauthToken` + `refreshToken` + `tokenExpireTime`
-- **远端路径 (已分析):** `/algo/api/v3/user/refresh_token` — 见下方"远端 Token 刷新接口分析"
-- **独立刷新:** 需要发现 `client_id`（服务器端密钥，不在本地 binary 中）
-
-### 远端 Token 刷新接口分析 (2026-04-26 深入分析)
-
-#### 二进制中发现的 API 路径
-
-通过遍历 Lingma 二进制文件，找到完整的 `/api/v3/user/` 路径族：
-
-| 路径 | 用途 |
-|------|------|
-| `/api/v3/user/login` | 用户登录 |
-| `/api/v3/user/status` | 用户状态查询 |
-| `/api/v3/user/logout` | 用户登出 |
-| `/api/v3/user/region` | 区域查询 |
-| `/api/v3/user/remoteToken` | 远程 Token 管理 |
-| `/api/v3/user/data_region` | 数据区域 |
-| `/api/v3/user/refresh_token` | **Token 刷新 (目标接口)** |
-| `/api/v3/user/grantAuthInfos` | 授权信息查询 |
-| `/api/v3/user/oauth2/deviceToken/poll` | OAuth2 设备码轮询 |
-
-#### 请求/响应结构 (GoReSym Types 反编译)
-
-**请求体 (`definition.RefreshTokenParams`):**
-```go
-type RefreshTokenParams struct {
-    SecurityOauthToken string `json:"securityOauthToken"`
-    RefreshToken       string `json:"refreshToken"`
-    TokenExpireTime    int64  `json:"tokenExpireTime"`
-}
-```
-
-**响应体 (`definition.RefreshTokenResult`):**
-```go
-type RefreshTokenResult struct {
-    BaseResult      definition.BaseResult
-    Success         bool   `json:"success"`
-    Uid             string `json:"uid,omitempty"`
-    Name            string `json:"name,omitempty"`
-    TokenExpireTime int64  `json:"tokenExpireTime,omitempty"`
-}
-```
-
-#### 端点可达性测试 (GET 方法 — 确认端点存在性)
-
-所有 `/api/v3/user/` 端点对 GET 返回 400 "method not supported"（存在）或 404（不存在），无需认证即可区分：
-
-| 路径 | 国际站 | 国内站 |
-|------|--------|--------|
-| `/algo/api/v3/user/login` | EXISTS (400) | EXISTS (400) |
-| `/algo/api/v3/user/status` | EXISTS (400) | EXISTS (400) |
-| `/algo/api/v3/user/logout` | EXISTS (400) | EXISTS (400) |
-| `/algo/api/v3/user/grantAuthInfos` | EXISTS (400) | EXISTS (400) |
-| `/algo/api/v3/user/refresh_token` | **NOT FOUND (404)** | **EXISTS (400)** |
-| `/algo/api/v3/user/region` | NOT FOUND (404) | EXISTS (403) |
-| `/algo/api/v3/user/remoteToken` | NOT FOUND (404) | EXISTS (403) |
-| `/algo/api/v3/user/data_region` | NOT FOUND (404) | NOT FOUND (404) |
-
-#### 403 "Request discarded" 根因分析
-
-POST 到 `/algo/api/v3/user/` 端点均返回 403，**无论使用何种认证方式**：
-
-| 测试 | 结果 |
-|------|------|
-| COSY Bearer 签名（完整 Cosy-* 头） | 403 |
-| OAuth Bearer Token (securityOauthToken) | 403 |
-| 无认证头（纯 JSON POST） | 403 |
-| Body 为空 | SSL EOF（服务器关闭连接） |
-| Non-existent endpoint POST | **404**（非 403，证明 403 非全局规则） |
-| `/algo/api/v1/ping` POST | **200** "pong"（基础 POST 正常） |
-
-**关键发现：**
-- 国内站与国际站使用**不同的 COSY 凭证体系**（国内站拒绝国际站 cosy_key 返回 "Login timeout"）
-- `/api/v3/user/refresh_token` 仅在国内站存在，国际站为 404
-- 403 来自 COSY 框架认证层，非 WAF/ALB 层（GET 可正常到达应用层返回 400）
-- OAuth 直达端点 `https://oauth.aliyun.com/v1/token` **可达**（返回 400 "invalid_grant"），但需要 `client_id`
-- `client_id` 为服务器端密钥（**已确认不在 binary 中**），由 Lingma 服务器代理 OAuth token 交换
-- 架构：客户端 → `/api/v3/user/refresh_token` (Lingma 代理) → `oauth.aliyun.com/v1/token` (OAuth 提供方)
-
-#### 服务端配置 (来自 binary config block)
-
-```json
-{
-  "big_model_endpoint": "https://lingma.alibabacloud.com/algo",      // 国际站
-  "big_model_endpoint": "https://lingma-api.tongyi.aliyun.com/algo", // 国内站
-  "login_url": "https://lingma.alibabacloud.com/lingma/login",
-  "auth_logout_url": "https://account.alibabacloud.com/logout/logout.htm",
-  "auth_login_url": "https://account.alibabacloud.com/login/login.htm",
-  "message_encode": "1",
-  "login_encode": "2"
-}
-```
-
-#### 关键结论
-
-1. **远端 HTTP 刷新端点 `/algo/api/v3/user/refresh_token` 在国内站存在但被 403 拦截**
-2. **实际 token 刷新通过本地 LSP WebSocket `auth/refreshToken` 完成**（`doRefreshToken` 为 LSP RPC handler）
-3. **完全独立的远端 token 刷新需要绕过 403 拦截**，可能需要：
-   - 使用正确的 TLS 指纹 (utls Chrome preset)
-   - 国内站凭证 (与当前国际站凭证不同)
-   - 服务器端 IP 白名单
-
-| Scenario | Behavior |
-|----------|----------|
-| `cache/user` not found | Startup fails with clear error message pointing to setup steps |
-| `cache/id` not found | Startup fails with clear error message |
-| `AES decryption failure (machineKey < 16 chars)` | Startup fails with diagnostic message |
-| `cache/user` JSON parse failure | Startup fails; may indicate version change |
-| Lingma returns non-200 (auth/schema error) | Returns 502 with upstream error details |
-| TLS handshake rejected (utls fingerprint mismatch) | Returns 502; logs suggest trying different utls preset |
-| SSE stream interrupted mid-response | Returns partial response with finish_reason `"error"`; logs details |
-| `cache/user` deleted or invalidated | `/v1/chat/completions` returns 401; user must re-login via VS Code plugin to regenerate cache |
-| `/admin/refresh` triggered but cache/user unchanged | Returns 200 with `"no_change": true` |
-| Remote model list fetch fails | Falls back to static model mapping table |
-
-## Graceful Shutdown
-
-`main.go` listens for `SIGINT`/`SIGTERM`:
-
-1. Stop accepting new connections
-2. Wait up to 30 seconds for in-flight SSE streams to complete
-3. Clean up session state
-4. Close TLS connection pool
-5. Exit
-
-All request handlers receive a `context.Context` derived from the server lifecycle for proper cancellation propagation.
-
-## Unverified Assumptions
-
-Items that are believed to work based on analysis but have not been independently tested:
-
-1. **utls Chrome fingerprint:** Whether `utls.HelloChrome_Auto` is sufficient to pass Lingma's TLS fingerprint check. Known: Python `requests` fails, `curl` works. Go standard library status is unknown.
-2. **Cosy-Clientip value:** Whether the server validates this header against the actual source IP. Current value `198.18.0.1` is from captured samples.
-3. **Long conversation stability:** Whether very long message histories (50+ turns) are handled correctly by the Lingma backend.
-4. **国内站凭证兼容性:** 国内站 (`lingma-api.tongyi.aliyun.com`) 使用不同的 COSY 凭证体系。国际站 cosy_key 在国内站返回 "Login timeout"。国内站独立可用性待测试。
-
-## Frida-已验证结论 (2026-04-26 实时抓包)
-
-以下假设已通过 Frida 实时网络抓包实验证实或否定：
-
-| 假设 | 结论 | 证据 |
-|------|------|------|
-| `auth/refreshToken` 触发远端 HTTP 请求 | **已否定** | WSAIoctl/GetAddrInfoW/connect 全程无事件 |
-| Lingma chat 连接 `lingma.alibabacloud.com` | **已证实** | GetAddrInfoW hook 实时捕获 DNS 解析 |
-| Go 使用标准 `connect` API | **已否定** | 全部 7 个 connect 变体 hook 但均未触发 |
-| Go 使用 `ConnectEx` (mswsock.dll) | **已证实** | 通过 `WSAIoctl(SIO_GET_EXTENSION_FUNCTION_POINTER)` 动态获取 |
-| 国内站 `/api/v3/user/refresh_token` 被真实 Lingma 调用 | **已否定** | Lingma 的 `auth/refreshToken` 全程无网络活动，不走此端点 |
-| Python `requests` TLS 被拒 | **已证实** | 仅 `curl` 和 `utls` 可用 |
-
-### Go Windows 网络栈发现
-
-Go on Windows **完全绕过** ws2_32.dll 的标准 connect API：
-- 通过 `WSAIoctl(SIO_GET_EXTENSION_FUNCTION_POINTER)` 获取 `ConnectEx` 函数指针
-- `ConnectEx` 指针在启动时缓存（Frida 动态 hook 捕获到 AcceptEx，但 ConnectEx 已预缓存）
-- `WSAIoctl(SIO_SET_COMPATIBILITY_MODE)` 在每个 socket 创建后调用
-- AF_INET6 socket 优先创建，失败后回退到 AF_INET
-- 数据模式：293B TLS ClientHello → 64B+86B 握手 → 16KB+ 应用数据块
-
-## Current Constraints
-
-1. ~~Credentials sourced from `~/.lingma/cache/user`~~ — **已突破**: 便携凭据提取器 + 环境变量模式支持完全脱离本地 Lingma
-2. COSY 凭据（`cosy_key` + `encrypt_user_info`）长期有效，无需 OAuth token 刷新 —— Chat API 仅依赖 COSY Bearer
-3. OAuth 独立刷新已确认不可行：
-   - `client_id` 为服务器端密钥（不在本地 binary 中），独立 OAuth PKCE 流程无法完成 token 交换
-   - 国际站未部署 `/api/v3/user/` 端点（404）
-   - 国内站 `/api/v3/user/refresh_token` 端点返回 403
-4. 凭据引导需要一次性本地操作（`credential_extractor.py`），之后完全脱离 Lingma
-5. TLS 指纹要求：仅 `curl` 和 `utls` 可通，Python `requests` 被拒
-6. 国内站使用不同的 COSY 凭证体系，国际站 cosy_key 在国内站返回 "Login timeout"
-
-## Evolution Roadmap
-
-**Phase 1 (current — functional PoC):**
-- GET APIs fully functional (`/v1/models`)
-- POST chat with full body construction (arbitrary messages, no template needed)
-- Multi-turn conversation via session-scoped message history injection
-- Credential auto-read from cache/user
-- Session tracking with auto-cleanup
-- Admin endpoints: `/admin/status`, `/admin/refresh`（重新读取 cache/user）
-
-**Phase 2 (credential resilience — 已重新评估):**
-- ✅ **便携凭据引导**: `credential_extractor.py` 导出 COSY 凭据 → 环境变量/配置文件
-- ✅ **多来源凭据加载**: 构造参数 > 环境变量 > portable_config.json > cache/user
-- ✅ **脱离本地环境**: `LingmaRemoteAPI` 支持纯环境变量模式，无需本地 Lingma 程序
-- ~~本地 LSP WebSocket `auth/refreshToken` 自动刷新~~ — 不需要（COSY 凭据长期有效）
-- ~~直接调用远端 `/algo/api/v3/user/refresh_token`~~ — 不可行（国际站 404，国内站 403）
-- **OAuth 回调拦截**: `oauth_callback_intercept.py` 分析登录流程；独立拦截受限于 `client_id`（服务器端密钥）
-- ✅ **COSY 凭据监控**: 后台 goroutine 监控凭据文件变化，自动重载
-
-**Phase 3 (polish):**
-- Multi-user support (credential isolation per user)
-- Rate limiting
-- Usage statistics
-- Encode=1 support for non-chat endpoints if needed (login/heartbeat 等辅助端点)
-
-## 分析工具清单
-
-### Python 参考实现
-
-| 文件 | 用途 |
-|------|------|
-| `lingma_remote_api.py` | **主客户端** — Chat API 直连（COSY Bearer + 原始 JSON），支持环境变量/便携配置/本地缓存三种凭据源 |
-| `lingma_client.py` | 本地 WebSocket 客户端（LSP 协议，绕过 TLS 指纹） |
-| `tools/credential_extractor.py` | **便携凭据导出** — 从 Lingma 缓存提取 COSY 凭据为可移植格式 |
-| `tools/oauth_callback_intercept.py` | **OAuth 回调拦截** — 分析/拦截登录流程，支持 --analyze-only / --standalone 模式 |
-| `tools/test_login_flow.py` | **登录流程测试** — 通过 WebSocket 触发 auth/login，分析登录 URL 和 auth/report 推送 |
-| `tools/ws_refresh_test.py` | LSP WebSocket auth/refreshToken 测试 |
-| `tools/restore_cache.py` | cache/user 凭据恢复工具 |
-
-### Frida 网络分析脚本
-
-| 文件 | Hook 目标 | 关键发现 |
-|------|-----------|---------|
-| `tools/frida_minimal_hook.js` | connect, WSASend, WSARecv, TLS SNI | 基础抓包；Go 绕过 connect |
-| `tools/frida_connect_all.py` | 全部 ws2 connect 变体 + mswsock ConnectEx | 无一触发 |
-| `tools/frida_connect_and_chat.py` | 同上 + GetAddrInfoW + chat 触发 | DNS 首次正确捕获 |
-| `tools/frida_dns_trace.py` | getaddrinfo, gethostbyname, WSASocketW, send | TLS 数据流首次捕获 |
-| `tools/frida_go_dial.py` | WSASocketW + connect + WSAConnect + 栈追踪 | Go 绕过机制初步定位 |
-| `tools/frida_spawn_trace.py` | Frida.spawn() 启动 Lingma + 完整 chat 流 | 启动期也无线程连接事件 |
-| `tools/frida_wsaioctl_hook.py` | WSAIoctl（初版，signed/unsigned bug） | SIO_GET_EXTENSION 确认调用 |
-| `tools/frida_wsaioctl_v2.py` | WSAIoctl（修复版 + 动态 ConnectEx hook） | AcceptEx 动态 hook 成功；ConnectEx 预缓存 |
-
-### 关键 Go 函数 (GoReSym 定位, Lingma.exe 2.11.2)
-
-| 函数 (FullName) | Offset (from ImageBase 0x140000000) | 用途 |
-|-----------------|--------------------------------------|------|
-| `cosy/remoting.BuildBigModelSvcRequestWithConfig` | 0x87fc00 | 构建 Chat API 请求入口 |
-| `cosy/remoting.BuildBigModelAuthRequest` | 0x8808e0 | 构建认证请求 |
-| `cosy/remoting.buildRequest` | 0x880da0 | 构建 HTTP 请求 |
-| `cosy/remoting.buildURL` | 0x881480 | 构建请求 URL |
-| `cosy/remoting.encodeRequestBody` | 0x881820 | 编码请求体（JSON marshal + 可选 AES） |
-| `cosy/remoting.createHTTPRequest` | 0x881980 | 创建 HTTP 请求对象 |
-| `cosy/remoting.createCompressedHTTPRequest` | 0x881ce0 | 创建压缩 HTTP 请求 |
-| `cosy/remoting.logRequest` | 0x8821e0 | 日志记录请求 |
-| `cosy/remoting.addBigModelSignatureHeaders` | 0x882760 | 添加 COSY 签名头 |
-| `cosy/remoting.addBigModelAuthorizationHeaders` | 0x882ba0 | 添加 Authorization 头 |
-| `cosy/remoting.shouldAddEncodeParam` | 0x882540 | 判断是否需要 Encode=1 |
-| `cosy/remoting.shouldEncryptBody` | 0x882680 | 判断是否需要 AES 加密 |
-| `cosy/auth/user.doRefreshToken` | 0x140C35B20 (RVA) | auth/refreshToken 实现 |
-
-### 记忆文件
-
-| 文件 | 内容 |
-|------|------|
-| `memory/lingma-encoding-cracked.md` | Encode=1 完整算法破解 + AES 加密层 |
-| `memory/lingma-oauth-analysis.md` | OAuth PKCE 流程 + refreshToken 分析 + 远端端点状态 |
-| `memory/lingma-aes-key-source-analysis.md` | AES key 来源分析（session 级，每进程不同） |
-| `memory/lingma-analysis-final-status.md` | 远端 Chat API 完整实现状态 |
-| `memory/frida-network-analysis.md` | Frida 网络抓包完整分析 |
+## 16. 测试策略
+
+### 16.1 单元测试
+
+至少覆盖：
+
+1. 模型别名解析
+2. `auto -> ""` 转换
+3. `cache/user` 解密
+4. Bearer 签名计算
+5. SSE 外层 / 内层解析
+6. session 合并逻辑
+
+### 16.2 集成测试
+
+至少覆盖：
+
+1. `/v1/models` 代理返回
+2. `/v1/chat/completions` 流式
+3. `/v1/chat/completions` 非流式
+4. `/admin/refresh`
+5. 错误凭据场景
+
+### 16.3 Mock 策略
+
+为了降低测试成本：
+
+1. `Transport` 必须可 mock
+2. `CredentialProvider` 必须可 mock
+3. `ModelResolver` 必须可 mock
+4. SSE 解析逻辑要能脱离真实网络做纯数据测试
+
+## 17. 分阶段交付
+
+### Phase 1：最小可用版本
+
+交付内容：
+
+1. 凭据加载
+2. 模型列表
+3. 流式 / 非流式聊天
+4. `curl bridge`
+5. 基础错误处理
+
+### Phase 2：代理能力完善
+
+交付内容：
+
+1. 会话管理
+2. 管理接口
+3. 模型表缓存与刷新
+4. 更细的日志与状态输出
+
+### Phase 3：传输层增强
+
+交付内容：
+
+1. Go 原生 `utls`
+2. 更稳定的 SSE 与连接管理
+3. 重试、超时、指标
+
+## 18. 验收标准
+
+在声称首期完成前，至少要通过这些验证：
+
+1. 使用显式凭据或便携配置可以启动服务
+2. `/v1/models` 能返回模型列表
+3. `stream=true` 时能持续输出 chunk
+4. `stream=false` 时能输出完整响应
+5. `model=auto` 会映射成空 key，而不是字面量 `auto`
+6. 显式模型 key 能正确透传
+7. 使用 `session_id` 的第二轮请求能带上第一轮上下文
+8. 错误凭据会产生明确鉴权失败
+9. `/admin/refresh` 能重读凭据并刷新模型表
+
+## 19. 风险与后续问题
+
+这些问题需要记录，但不阻塞首期：
+
+1. Go 原生 `utls` 是否能完全替代 `curl`
+2. 长对话历史是否会触发远端长度或稳定性问题
+3. 国内站凭据体系是否值得单独支持
+4. 哪些非 Chat 端点未来仍需要 `Encode=1`
+5. 是否需要在二期以后设计 `tool_calls` 桥接层
+
+## 20. 结论
+
+这份设计文档的目的，不是复述 Lingma 已经分析出了什么，而是把这些已知事实转成一个可直接指导实现的工程方案。
+
+后续如果按本设计进入实现，应严格以这些边界推进：
+
+1. 首期只做最小聊天代理
+2. 不把 OAuth 独立化混入首期范围
+3. 先交付稳定可用的 `curl bridge` 版本
+4. 再迭代原生 `utls`、工具调用桥接和更多能力
