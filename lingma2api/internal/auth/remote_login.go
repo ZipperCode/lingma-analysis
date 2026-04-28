@@ -13,7 +13,11 @@ import (
 )
 
 const (
-	userLoginURL    = "https://lingma.alibabacloud.com/algo/api/v3/user/login?Encode=1"
+	// Note: The remote login API is not directly callable from outside Lingma.
+	// The body encoding (Encode=2 per login_encode config, AES encrypt with unknown key)
+	// has not been reverse-engineered. All direct attempts return 500.
+	// Use the WebSocket RPC (RefreshTokensViaWebSocket) or OAuth flow instead.
+	userLoginURL    = "https://lingma-api.tongyi.aliyun.com/algo/api/v3/user/login?Encode=1"
 	userLoginAESKey = "QbgzpWzN7tfe43gf"
 
 	// OldSignatureKey is the session_key for old Signature flow (addBigModelSignatureHeaders).

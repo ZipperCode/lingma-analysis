@@ -28,7 +28,7 @@ func main() {
 		captureClientID  bool
 		machineIDOverride string
 	)
-	flag.StringVar(&clientID, "client-id", "", "OAuth client_id (REQUIRED unless --capture-client-id; obtain via Stage A documented in docs/topics/client-id-extraction.md)")
+	flag.StringVar(&clientID, "client-id", "", "OAuth client_id (optional for refresh when Lingma is running; required for new bootstrap)")
 	flag.StringVar(&listenAddr, "listen-addr", "127.0.0.1:37510", "local callback listen address")
 	flag.StringVar(&redirectURL, "redirect-url", "", "explicit redirect URL (defaults to http://<listen-addr>/callback)")
 	flag.StringVar(&outputPath, "output", "./auth/credentials.json", "output credentials.json file")
@@ -223,72 +223,103 @@ func runRefresh(refreshFile, clientID, sessionKey string, useLingma bool, lingma
 	if clientID == "" {
 		clientID = os.Getenv("LINGMA_CLIENT_ID")
 	}
-	if clientID == "" {
-		log.Fatal("missing --client-id or LINGMA_CLIENT_ID for refresh")
-	}
 
 	refreshToken := stored.OAuth.RefreshToken
 	if refreshToken == "" {
 		log.Fatal("credentials file missing refresh_token")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
+	var accessToken, newRefreshToken, tokenExpireMs string
+	var userID string
 
-	tokens, err := auth.RefreshTokens(ctx, auth.RefreshTokenConfig{
-		RefreshToken: refreshToken,
-		ClientID:     clientID,
-	})
-	if err != nil {
-		log.Fatalf("refresh tokens: %v", err)
-	}
-	fmt.Printf("Token refresh successful (access_token: %s...).\n", maskValue(tokens.AccessToken, 15))
+	if clientID != "" {
+		// Direct OAuth refresh (needs client_id)
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
 
-	stored.OAuth.AccessToken = tokens.AccessToken
-	stored.OAuth.RefreshToken = tokens.RefreshToken
-
-	machineID := stored.Auth.MachineID
-	if machineID == "" {
-		machineID = auth.NewMachineID()
-		fmt.Printf("Auto-generated machine_id: %s\n", machineID)
-	}
-
-	userID := stored.Auth.UserID
-	username := ""
-
-	var newStored proxy.StoredCredentialFile
-	if useLingma {
-		newStored, err = deriveWithLingma(lingmaBin, tokens, machineID, userID, username)
-	} else {
-		expireMs := ""
-		if tokens.ExpiresIn > 0 {
-			expireMs = fmt.Sprintf("%d", time.Now().UnixMilli()+int64(tokens.ExpiresIn)*1000)
-		}
-		newStored, err = auth.DeriveCredentialsRemotely(auth.RemoteLoginConfig{
-			AccessToken:   tokens.AccessToken,
-			RefreshToken:  tokens.RefreshToken,
-			UserID:        userID,
-			Username:      username,
-			MachineID:     machineID,
-			TokenExpireMs: expireMs,
-			SessionKey:    sessionKey,
+		tokens, err := auth.RefreshTokens(ctx, auth.RefreshTokenConfig{
+			RefreshToken: refreshToken,
+			ClientID:     clientID,
 		})
-	}
-	if err != nil {
-		log.Fatalf("derive credentials after refresh: %v", err)
+		if err != nil {
+			log.Fatalf("refresh tokens via OAuth: %v", err)
+		}
+		fmt.Printf("Token refresh via OAuth successful (access_token: %s...).\n", maskValue(tokens.AccessToken, 15))
+		accessToken = tokens.AccessToken
+		newRefreshToken = tokens.RefreshToken
+		if tokens.ExpiresIn > 0 {
+			tokenExpireMs = fmt.Sprintf("%d", time.Now().UnixMilli()+int64(tokens.ExpiresIn)*1000)
+		}
+	} else {
+		// WebSocket refresh via Lingma (no client_id needed)
+		fmt.Println("No --client-id provided, using Lingma WebSocket for token refresh...")
+		wsResult, err := auth.RefreshTokensViaWebSocket(auth.WSRefreshConfig{
+			SecurityOauthToken: stored.OAuth.AccessToken,
+			RefreshToken:       refreshToken,
+		})
+		if err != nil {
+			log.Fatalf("refresh tokens via WebSocket: %v (is Lingma running on port 37010?)", err)
+		}
+		fmt.Printf("Token refresh via WebSocket successful (access_token: %s...).\n", maskValue(wsResult.AccessToken, 15))
+		accessToken = wsResult.AccessToken
+		newRefreshToken = wsResult.RefreshToken
+		if wsResult.ExpireTime > 0 {
+			tokenExpireMs = fmt.Sprintf("%d", wsResult.ExpireTime)
+		}
+		userID = wsResult.UserID
 	}
 
-	if newStored.Source == "" {
-		newStored.Source = stored.Source
+	stored.OAuth.AccessToken = accessToken
+	stored.OAuth.RefreshToken = newRefreshToken
+	if tokenExpireMs != "" {
+		stored.TokenExpireTime = tokenExpireMs
 	}
-	if userID != "" && newStored.Auth.UserID == "" {
-		newStored.Auth.UserID = userID
+	stored.UpdatedAt = time.Now().Format(time.RFC3339)
+
+	if userID != "" && stored.Auth.UserID == "" {
+		stored.Auth.UserID = userID
 	}
-	if newStored.Auth.MachineID == "" {
-		newStored.Auth.MachineID = machineID
+	if stored.Auth.MachineID == "" {
+		stored.Auth.MachineID = auth.NewMachineID()
+		fmt.Printf("Auto-generated machine_id: %s\n", stored.Auth.MachineID)
 	}
 
-	if err := auth.SaveCredentialFile(refreshFile, newStored); err != nil {
+	// auth data (cosy_key, encrypt_user_info) is user-level and
+	// does not need re-deriving on token refresh.
+	if stored.Auth.CosyKey == "" || stored.Auth.EncryptUserInfo == "" {
+		username := ""
+		tokens := auth.ExchangedTokens{
+			AccessToken:  accessToken,
+			RefreshToken: newRefreshToken,
+		}
+
+		var newStored proxy.StoredCredentialFile
+		if useLingma {
+			newStored, err = deriveWithLingma(lingmaBin, tokens, stored.Auth.MachineID, stored.Auth.UserID, username)
+		} else {
+			if tokenExpireMs == "" {
+				tokenExpireMs = fmt.Sprintf("%d", time.Now().UnixMilli()+3600*1000)
+			}
+			newStored, err = auth.DeriveCredentialsRemotely(auth.RemoteLoginConfig{
+				AccessToken:   accessToken,
+				RefreshToken:  newRefreshToken,
+				UserID:        stored.Auth.UserID,
+				Username:      username,
+				MachineID:     stored.Auth.MachineID,
+				TokenExpireMs: tokenExpireMs,
+				SessionKey:    sessionKey,
+			})
+		}
+		if err != nil {
+			log.Fatalf("derive credentials after refresh: %v", err)
+		}
+		stored.Auth = newStored.Auth
+		if newStored.Source != "" {
+			stored.Source = newStored.Source
+		}
+	}
+
+	if err := auth.SaveCredentialFile(refreshFile, stored); err != nil {
 		log.Fatalf("save credentials: %v", err)
 	}
 

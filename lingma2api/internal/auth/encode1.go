@@ -110,6 +110,14 @@ func lingmaDecode(body string) []byte {
 	return decoded
 }
 
+func LingmaEncode(data []byte) string {
+	return lingmaEncode(data)
+}
+
+func LingmaEncodeAES(plaintext, aesKey []byte) (string, error) {
+	return lingmaEncodeAES(plaintext, aesKey)
+}
+
 func lingmaEncodeAES(plaintext, aesKey []byte) (string, error) {
 	encrypted, err := EncryptCacheUser(string(aesKey), plaintext)
 	if err != nil {
