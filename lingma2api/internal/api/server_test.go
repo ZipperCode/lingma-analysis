@@ -99,7 +99,7 @@ func TestChatCompletionsNonStreamReturnsOpenAIResponse(t *testing.T) {
 		},
 		Builder: fakeBuilder{},
 		Now:     func() time.Time { return time.Unix(1, 0) },
-	})
+	}, nil)
 
 	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"auto","messages":[{"role":"user","content":"hi"}],"stream":false}`))
 	request.Header.Set("Content-Type", "application/json")
@@ -122,7 +122,7 @@ func TestAdminRefreshRequiresTokenWhenConfigured(t *testing.T) {
 		Transport:   fakeTransport{},
 		Builder:     fakeBuilder{},
 		AdminToken:  "secret",
-	})
+	}, nil)
 
 	request := httptest.NewRequest(http.MethodPost, "/admin/refresh", nil)
 	recorder := httptest.NewRecorder()
@@ -140,7 +140,7 @@ func TestAdminRefreshReturnsNotImplementedWithoutRefreshFlow(t *testing.T) {
 		Sessions:    fakeSessions{},
 		Transport:   fakeTransport{},
 		Builder:     fakeBuilder{},
-	})
+	}, nil)
 
 	request := httptest.NewRequest(http.MethodPost, "/admin/refresh", nil)
 	recorder := httptest.NewRecorder()
@@ -148,5 +148,135 @@ func TestAdminRefreshReturnsNotImplementedWithoutRefreshFlow(t *testing.T) {
 
 	if recorder.Code != http.StatusNotImplemented {
 		t.Fatalf("expected 501, got %d", recorder.Code)
+	}
+}
+
+func TestChatCompletionsRejectsToolMessageWithoutToolCallID(t *testing.T) {
+	handler := NewServer(Dependencies{
+		Credentials: fakeCredentials{},
+		Models:      fakeModels{},
+		Sessions:    fakeSessions{},
+		Transport:   fakeTransport{},
+		Builder:     fakeBuilder{},
+	}, nil)
+
+	body := `{"model":"auto","messages":[{"role":"tool","content":"result"}]}`
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for tool message without tool_call_id, got %d", recorder.Code)
+	}
+}
+
+func TestChatCompletionsAllowsAssistantWithToolCalls(t *testing.T) {
+	handler := NewServer(Dependencies{
+		Credentials: fakeCredentials{},
+		Models:      fakeModels{},
+		Sessions:    fakeSessions{},
+		Transport: fakeTransport{
+			lines: []string{`data:{"body":"{\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}","statusCodeValue":200}`, `data:[DONE]`},
+		},
+		Builder: fakeBuilder{},
+		Now:     func() time.Time { return time.Unix(1, 0) },
+	}, nil)
+
+	body := `{"model":"auto","messages":[{"role":"assistant","content":"","tool_calls":[{"id":"c1","type":"function","function":{"name":"read_file","arguments":"{}"}}]},{"role":"tool","content":"result","tool_call_id":"c1"}],"stream":false}`
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200 for valid tool message chain, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestChatCompletionsRejectsToolCallWithoutFunctionName(t *testing.T) {
+	handler := NewServer(Dependencies{
+		Credentials: fakeCredentials{},
+		Models:      fakeModels{},
+		Sessions:    fakeSessions{},
+		Transport:   fakeTransport{},
+		Builder:     fakeBuilder{},
+	}, nil)
+
+	body := `{"model":"auto","messages":[{"role":"assistant","content":"","tool_calls":[{"id":"c1","type":"function","function":{"name":"","arguments":"{}"}}]}]}`
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for tool_call without function name, got %d", recorder.Code)
+	}
+}
+
+func TestChatCompletionsStreamWithToolCalls(t *testing.T) {
+	handler := NewServer(Dependencies{
+		Credentials: fakeCredentials{},
+		Models:      fakeModels{},
+		Sessions:    fakeSessions{},
+		Transport: fakeTransport{
+			lines: []string{
+				`data:{"body":"{\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"c2\",\"type\":\"function\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"\"}}]}}]}","statusCodeValue":200}`,
+				`data:{"body":"{\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"main.go\\\"}\"}}]}}]}","statusCodeValue":200}`,
+				`data:[DONE]`,
+			},
+		},
+		Builder: fakeBuilder{},
+		Now:     func() time.Time { return time.Unix(1, 0) },
+	}, nil)
+
+	body := `{"model":"auto","messages":[{"role":"user","content":"read main.go"}],"stream":true}`
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	responseBody := recorder.Body.String()
+	if !strings.Contains(responseBody, `"tool_calls"`) {
+		t.Fatalf("expected tool_calls in SSE response, got: %s", responseBody)
+	}
+	if !strings.Contains(responseBody, `"read_file"`) {
+		t.Fatalf("expected read_file function name, got: %s", responseBody)
+	}
+}
+
+func TestChatCompletionsStreamWithContentOnlyNoToolCalls(t *testing.T) {
+	handler := NewServer(Dependencies{
+		Credentials: fakeCredentials{},
+		Models:      fakeModels{},
+		Sessions:    fakeSessions{},
+		Transport: fakeTransport{
+			lines: []string{
+				`data:{"body":"{\"choices\":[{\"delta\":{\"content\":\"Hel\"}}]}","statusCodeValue":200}`,
+				`data:{"body":"{\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}","statusCodeValue":200}`,
+				`data:[DONE]`,
+			},
+		},
+		Builder: fakeBuilder{},
+		Now:     func() time.Time { return time.Unix(1, 0) },
+	}, nil)
+
+	body := `{"model":"auto","messages":[{"role":"user","content":"hi"}],"stream":true}`
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), `"content":"Hel"`) {
+		t.Fatalf("expected content in SSE, got: %s", recorder.Body.String())
+	}
+	if strings.Contains(recorder.Body.String(), `"tool_calls"`) {
+		t.Fatalf("unexpected tool_calls in content-only response: %s", recorder.Body.String())
 	}
 }

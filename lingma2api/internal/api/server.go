@@ -2,14 +2,19 @@ package api
 
 import (
 	"context"
+	"embed"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
+	"lingma2api/internal/db"
+	"lingma2api/internal/middleware"
 	"lingma2api/internal/proxy"
 )
 
@@ -50,10 +55,12 @@ type Dependencies struct {
 	Builder     RequestBuilder
 	AdminToken  string
 	Now         func() time.Time
+	FrontendFS  embed.FS
 }
 
 type Server struct {
 	deps Dependencies
+	db   *db.Store
 }
 
 type chatCompletionResponse struct {
@@ -65,15 +72,17 @@ type chatCompletionResponse struct {
 }
 
 type chatCompletionChoice struct {
-	Index        int            `json:"index"`
-	Message      *proxy.Message `json:"message,omitempty"`
-	Delta        *deltaPayload  `json:"delta,omitempty"`
-	FinishReason *string        `json:"finish_reason"`
+	Index        int              `json:"index"`
+	Message      *proxy.Message   `json:"message,omitempty"`
+	Delta        *deltaPayload    `json:"delta,omitempty"`
+	FinishReason *string          `json:"finish_reason"`
+	ToolCalls    []proxy.ToolCall `json:"tool_calls,omitempty"`
 }
 
 type deltaPayload struct {
-	Role    string `json:"role,omitempty"`
-	Content string `json:"content,omitempty"`
+	Role      string           `json:"role,omitempty"`
+	Content   string           `json:"content,omitempty"`
+	ToolCalls []proxy.ToolCall `json:"tool_calls,omitempty"`
 }
 
 type adminStatusResponse struct {
@@ -82,12 +91,12 @@ type adminStatusResponse struct {
 	SessionCount int                    `json:"session_count"`
 }
 
-func NewServer(deps Dependencies) http.Handler {
+func NewServer(deps Dependencies, store *db.Store) http.Handler {
 	if deps.Now == nil {
 		deps.Now = time.Now
 	}
 
-	server := &Server{deps: deps}
+	server := &Server{deps: deps, db: store}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/chat/completions", server.handleChatCompletions)
 	mux.HandleFunc("/v1/models", server.handleModels)
@@ -95,7 +104,87 @@ func NewServer(deps Dependencies) http.Handler {
 	mux.HandleFunc("/admin/refresh", server.handleAdminRefresh)
 	mux.HandleFunc("/admin/sessions", server.handleAdminSessions)
 	mux.HandleFunc("/admin/sessions/", server.handleAdminSessionDelete)
-	return mux
+	mux.HandleFunc("/admin/dashboard", server.handleAdminDashboard)
+	mux.HandleFunc("/admin/account", server.handleAdminAccount)
+	mux.HandleFunc("/admin/account/refresh", server.handleAdminAccountRefresh)
+	mux.HandleFunc("/admin/settings", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			server.handleAdminSettingsGet(w, r)
+		} else if r.Method == http.MethodPut {
+			server.handleAdminSettingsUpdate(w, r)
+		} else {
+			writeMethodNotAllowed(w, "GET, PUT")
+		}
+	})
+	mux.HandleFunc("/admin/logs", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/admin/logs" {
+			server.handleAdminLogsList(w, r)
+		} else if strings.HasSuffix(r.URL.Path, "/replay") {
+			server.handleAdminLogsReplay(w, r)
+		} else {
+			server.handleAdminLogsGet(w, r)
+		}
+	})
+	mux.HandleFunc("/admin/logs/cleanup", server.handleAdminLogsCleanup)
+	mux.HandleFunc("/admin/logs/export", server.handleAdminLogsExport)
+	mux.HandleFunc("/admin/stats/export", server.handleAdminStatsExport)
+	mux.HandleFunc("/admin/mappings", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			server.handleAdminMappingsList(w, r)
+		} else if r.Method == http.MethodPost {
+			server.handleAdminMappingsCreate(w, r)
+		} else {
+			writeMethodNotAllowed(w, "GET, POST")
+		}
+	})
+	mux.HandleFunc("/admin/mappings/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/admin/mappings/test" {
+			server.handleAdminMappingsTest(w, r)
+			return
+		}
+		if r.Method == http.MethodPut {
+			server.handleAdminMappingsUpdate(w, r)
+		} else if r.Method == http.MethodDelete {
+			server.handleAdminMappingsDelete(w, r)
+		} else {
+			writeMethodNotAllowed(w, "PUT, DELETE")
+		}
+	})
+
+	if deps.FrontendFS != (embed.FS{}) {
+		subFS, err := fs.Sub(deps.FrontendFS, "frontend-dist")
+		if err == nil {
+			fileServer := http.FileServerFS(subFS)
+			mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+				f, err := subFS.Open(strings.TrimPrefix(r.URL.Path, "/"))
+				if err == nil {
+					f.Close()
+					fileServer.ServeHTTP(w, r)
+					return
+				}
+				r.URL.Path = "/"
+				fileServer.ServeHTTP(w, r)
+			})
+		}
+	}
+
+	handler := http.Handler(mux)
+	if store != nil {
+		settings, _ := store.GetSettings(context.Background())
+		cfg := middleware.LoggingConfig{
+			StorageMode:    settings["storage_mode"],
+			TruncateLength: parseIntOr(settings["truncate_length"], 102400),
+		}
+		handler = middleware.Logging(store, cfg)(handler)
+	}
+	return handler
+}
+
+func parseIntOr(s string, def int) int {
+	if v, err := strconv.Atoi(s); err == nil {
+		return v
+	}
+	return def
 }
 
 func (server *Server) handleModels(writer http.ResponseWriter, request *http.Request) {
@@ -247,19 +336,30 @@ func (server *Server) streamChatResponse(
 
 	var contentBuilder strings.Builder
 	err := proxy.ScanSSE(stream, func(event proxy.SSEEvent) error {
-		if event.Done || event.Content == "" {
+		if event.Done {
 			return nil
 		}
-		contentBuilder.WriteString(event.Content)
+		if event.Content == "" && len(event.ToolCalls) == 0 {
+			return nil
+		}
+		if event.Content != "" {
+			contentBuilder.WriteString(event.Content)
+		}
+		choice := chatCompletionChoice{Index: 0}
+		if len(event.ToolCalls) > 0 {
+			choice.Delta = &deltaPayload{
+				Role:      "assistant",
+				ToolCalls: event.ToolCalls,
+			}
+		} else {
+			choice.Delta = &deltaPayload{Content: event.Content}
+		}
 		if err := writeSSEChunk(writer, chatCompletionResponse{
 			ID:      responseID,
 			Object:  "chat.completion.chunk",
 			Created: server.deps.Now().Unix(),
 			Model:   chatRequest.Model,
-			Choices: []chatCompletionChoice{{
-				Index: 0,
-				Delta: &deltaPayload{Content: event.Content},
-			}},
+			Choices: []chatCompletionChoice{choice},
 		}); err != nil {
 			return err
 		}
@@ -396,11 +496,24 @@ func validateChatRequest(request proxy.OpenAIChatRequest) error {
 		return errors.New("messages must not be empty")
 	}
 	for _, message := range request.Messages {
-		if message.Content == "" {
-			return errors.New("message content must not be empty")
-		}
 		switch message.Role {
-		case "system", "user", "assistant":
+		case "system", "user":
+			if message.Content == "" {
+				return errors.New("message content must not be empty")
+			}
+		case "assistant":
+			if message.Content == "" && len(message.ToolCalls) == 0 {
+				return errors.New("assistant message must have content or tool_calls")
+			}
+			for _, tc := range message.ToolCalls {
+				if tc.Function.Name == "" {
+					return errors.New("tool_call function name must not be empty")
+				}
+			}
+		case "tool":
+			if message.ToolCallID == "" {
+				return errors.New("tool message must have tool_call_id")
+			}
 		default:
 			return fmt.Errorf("unsupported role %q", message.Role)
 		}

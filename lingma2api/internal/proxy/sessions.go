@@ -142,7 +142,22 @@ func hasMessagePrefix(candidate, prefix []Message) bool {
 		return false
 	}
 	for index := range prefix {
-		if candidate[index] != prefix[index] {
+		if !messageEqual(candidate[index], prefix[index]) {
+			return false
+		}
+	}
+	return true
+}
+
+func messageEqual(a, b Message) bool {
+	if a.Role != b.Role || a.Content != b.Content || a.Name != b.Name || a.ToolCallID != b.ToolCallID {
+		return false
+	}
+	if len(a.ToolCalls) != len(b.ToolCalls) {
+		return false
+	}
+	for i := range a.ToolCalls {
+		if a.ToolCalls[i] != b.ToolCalls[i] {
 			return false
 		}
 	}

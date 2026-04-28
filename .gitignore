@@ -8,3 +8,6 @@ auth/credentials_remote.json
 lingma2api/configs/client_id.txt
 lingma2api/configs/session_key.txt
 .playwright-mcp
+lingma2api.exe~
+lingma2api.exe
+lingma2api.db

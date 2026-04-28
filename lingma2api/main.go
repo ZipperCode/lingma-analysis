@@ -2,19 +2,25 @@ package main
 
 import (
 	"context"
+	"embed"
 	"flag"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
 	"lingma2api/internal/api"
 	"lingma2api/internal/config"
+	"lingma2api/internal/db"
 	"lingma2api/internal/proxy"
 )
+
+//go:embed all:frontend-dist
+var frontendDist embed.FS
 
 func main() {
 	var configPath string
@@ -35,6 +41,39 @@ func main() {
 	sessions := proxy.NewSessionStore(time.Duration(cfg.Session.TTLMinutes)*time.Minute, cfg.Session.MaxSessions, time.Now)
 	builder := proxy.NewBodyBuilder(cfg.Lingma.CosyVersion, time.Now, proxy.NewUUID, proxy.NewHexID)
 
+	store, err := db.Open("./lingma2api.db")
+	if err != nil {
+		log.Fatalf("open db: %v", err)
+	}
+	if err := store.Migrate(); err != nil {
+		log.Fatalf("migrate db: %v", err)
+	}
+	defer store.Close()
+
+	// Start background log cleanup goroutine
+	go func() {
+		ticker := time.NewTicker(10 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				settings, _ := store.GetSettings(context.Background())
+				retentionDays := 30
+				if d, err := strconv.Atoi(settings["retention_days"]); err == nil {
+					retentionDays = d
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				affected, err := store.CleanupExpiredLogs(ctx, retentionDays)
+				cancel()
+				if err != nil {
+					log.Printf("cleanup logs error: %v", err)
+				} else if affected > 0 {
+					log.Printf("cleaned up %d expired log(s)", affected)
+				}
+			}
+		}
+	}()
+
 	handler := api.NewServer(api.Dependencies{
 		Credentials: credentials,
 		Models:      models,
@@ -43,7 +82,8 @@ func main() {
 		Builder:     builder,
 		AdminToken:  cfg.Server.AdminToken,
 		Now:         time.Now,
-	})
+		FrontendFS:  frontendDist,
+	}, store)
 
 	server := &http.Server{
 		Addr:              fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port),

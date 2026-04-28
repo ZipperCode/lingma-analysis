@@ -43,7 +43,7 @@ func (builder *BodyBuilder) Build(request OpenAIChatRequest, messages []Message,
 
 	serializedMessages := make([]map[string]any, 0, len(messages))
 	for _, message := range messages {
-		serializedMessages = append(serializedMessages, map[string]any{
+		m := map[string]any{
 			"role":    message.Role,
 			"content": message.Content,
 			"response_meta": map[string]any{
@@ -55,7 +55,17 @@ func (builder *BodyBuilder) Build(request OpenAIChatRequest, messages []Message,
 				},
 			},
 			"reasoning_content_signature": "",
-		})
+		}
+		if message.Name != "" {
+			m["name"] = message.Name
+		}
+		if message.ToolCallID != "" {
+			m["tool_call_id"] = message.ToolCallID
+		}
+		if len(message.ToolCalls) > 0 {
+			m["tool_calls"] = message.ToolCalls
+		}
+		serializedMessages = append(serializedMessages, m)
 	}
 
 	payload := map[string]any{
@@ -106,6 +116,13 @@ func (builder *BodyBuilder) Build(request OpenAIChatRequest, messages []Message,
 			"stage":    "start",
 			"name":     "memory_intent_recognition_" + requestID,
 		},
+	}
+
+	if len(request.Tools) > 0 {
+		payload["tools"] = request.Tools
+	}
+	if request.ToolChoice != nil {
+		payload["tool_choice"] = request.ToolChoice
 	}
 
 	bodyBytes, err := json.Marshal(payload)

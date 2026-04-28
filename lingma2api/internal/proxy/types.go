@@ -19,9 +19,38 @@ var (
 	ErrCredentialsUnavailable = errors.New("credentials unavailable")
 )
 
+// ToolCall represents an OpenAI-compatible tool call from an assistant message.
+type ToolCall struct {
+	ID       string       `json:"id"`
+	Type     string       `json:"type"`
+	Function FunctionCall `json:"function"`
+}
+
+// FunctionCall holds the function name and JSON-encoded arguments.
+type FunctionCall struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+}
+
+// Tool is an OpenAI-compatible tool definition passed in a chat request.
+type Tool struct {
+	Type     string       `json:"type"`
+	Function ToolFunction `json:"function"`
+}
+
+// ToolFunction describes a tool's function schema.
+type ToolFunction struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Parameters  any    `json:"parameters,omitempty"`
+}
+
 type Message struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role       string     `json:"role"`
+	Content    string     `json:"content,omitempty"`
+	Name       string     `json:"name,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
 }
 
 type ExtraBody struct {
@@ -34,6 +63,8 @@ type OpenAIChatRequest struct {
 	Stream      bool      `json:"stream"`
 	Temperature *float64  `json:"temperature,omitempty"`
 	ExtraBody   ExtraBody `json:"extra_body,omitempty"`
+	Tools       []Tool    `json:"tools,omitempty"`
+	ToolChoice  any       `json:"tool_choice,omitempty"`
 }
 
 type OpenAIModel struct {
@@ -117,8 +148,9 @@ type RemoteChatRequest struct {
 }
 
 type SSEEvent struct {
-	Content string
-	Done    bool
+	Content   string
+	ToolCalls []ToolCall
+	Done      bool
 }
 
 type UpstreamHTTPError struct {
