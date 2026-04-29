@@ -8,11 +8,11 @@
 
 `client_id` **不是** 客户端生成的，而是由 **Lingma 服务端在 302 跳转链中注入** 的。经过 2026-04-28 的全面排查确认：
 
-- **二进制静态分析**：无硬编码 client_id **值**，仅有 Go 结构体字段 `json:"client_id"`（MCP client transport 层）
+- **程序结构静态分析**：无硬编码 client_id **值**，仅有 Go 结构体字段 `json:"client_id"`（MCP client transport 层）
 - **VS Code 扩展**：无 client_id（扩展为瘦客户端，OAuth 全部委托给 native binary）
 - **API 探索**：`client_id/register` 路径在所有域名下返回 HTML 首页或 404
 - **配置文件**：`portable_config.json` 等无 client_id 缓存
-- **历史抓包**：全部为 Chat API 流量，不含 OAuth 流
+- **历史流量采集**：全部为 Chat API 流量，不含 OAuth 流
 
 **唯一的提取路径**：浏览器完成阿里云登录后，在 DevTools Network 面板截取 `signin.aliyun.com/oauth2/v1/auth?client_id=<REAL_ID>` URL。
 
@@ -145,7 +145,7 @@ go run ./cmd/lingma-auth-bootstrap \
 
 ---
 
-## 3. 备用：Frida 抓包法（A2）
+## 3. 备用：Frida 流量采集法（A2）
 
 如果浏览器因风控/境外 IP 等原因无法完成登录，可使用已就绪的 Frida 脚本：
 
@@ -155,7 +155,7 @@ python tools/frida_extract_client_id.py \
   --out tools/oauth_traffic.jsonl
 ```
 
-该脚本 Hook `WinHttpConnect` / `WinHttpOpenRequest` / `WinHttpSendRequest`、`GetAddrInfoW`、`WSASend`，过滤包含 `oauth/client/token/login/auth/register` 的流量，从输出的 JSONL 中搜索 `signin.alibabacloud.com/oauth2/v1/auth` 即可提取 `client_id`。
+该脚本动态拦截 `WinHttpConnect` / `WinHttpOpenRequest` / `WinHttpSendRequest`、`GetAddrInfoW`、`WSASend`，过滤包含 `oauth/client/token/login/auth/register` 的流量，从输出的 JSONL 中搜索 `signin.alibabacloud.com/oauth2/v1/auth` 即可提取 `client_id`。
 
 **注意**：该脚本从未在本项目实际运行过，仅作为浏览器法失败时的回退。
 
@@ -173,7 +173,7 @@ python tools/frida_extract_client_id.py \
 | OAuth introspection/userinfo | **否**。`oauth.alibabacloud.com/v1/introspect` 等不识别 Lingma 的 `pt-` 格式 token。 | 2026-04-28 |
 | WebSocket 方法返回 client_id | **否**。尝试 10+ 种方法名均返回 "method not found" 或不含 client_id。 | 2026-04-28 |
 | Frida 内存扫描 | 技术可行但 98MB 二进制全扫超时；已知工具脚本 `frida_extract_client_id.py` 从未成功运行。 | 2026-04-27 |
-| 历史抓包 `capture/*.jsonl` | **否**。全部为 Chat API 流量，不含 OAuth 流。 | 2026-04-28 |
+| 历史流量采集 `capture/*.jsonl` | **否**。全部为 Chat API 流量，不含 OAuth 流。 | 2026-04-28 |
 | 自动化浏览器 (Playwright) | **否**。阿里云登录页面有反自动化检测，拒绝 automated browser。 | 2026-04-28 |
 | `~/.lingma/cache/user` 解密搜索 | **否**。解密后字段：`security_oauth_token`, `refresh_token`, `key`, `encrypt_user_info`，无 client_id。 | 2026-04-29 |
 | `~/.lingma/cache/client.json` | **否**。仅含 `debug` 和 `extensionConfigPullInterval`。 | 2026-04-29 |
@@ -183,7 +183,7 @@ python tools/frida_extract_client_id.py \
 | SQLite `supabase_token` 表 | **否**。表为空。 | 2026-04-29 |
 | `auth/pollToken` WebSocket 方法 | **否**。返回 "unknown method"。 | 2026-04-29 |
 
-## 5. `client_id/register` 二进制分析
+## 5. `client_id/register` 程序结构分析
 
 在 Lingma v2.11.1 二进制中，字符串 `client_id/register`（RVA `0x249BF62`）被三处代码引用：
 
@@ -200,7 +200,7 @@ python tools/frida_extract_client_id.py \
 
 ## 6. 后续使用
 
-提取到 `client_id` 后，配合 `--session-key`（Stage B 已破解）即可走通纯远程 bootstrap：
+提取到 `client_id` 后，配合 `--session-key`（Stage B 已解析）即可走通纯远程 bootstrap：
 
 ```bash
 go run ./cmd/lingma-auth-bootstrap \
@@ -240,5 +240,5 @@ go run ./cmd/lingma-auth-bootstrap \
 - `lingma2api/internal/auth/token_exchange.go` — `ExchangeCodeForTokens` / `RefreshTokens`（均需要 client_id）
 - `callback.html:53` — 服务端跳转链原始证据
 - `tools/capture_client_id_browser.py` — Playwright 自动捕获脚本（因反自动化检测不建议使用）
-- `tools/frida_extract_client_id.py` — 备用 Frida 抓包脚本
-- `docs/topics/session-key-cracking.md` — Stage B 破解文档（session_key 已解决）
+- `tools/frida_extract_client_id.py` — 备用 Frida 流量采集脚本
+- `docs/topics/session-key-analysis.md` — Stage B 推导文档（session_key 已解决）

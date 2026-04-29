@@ -27,24 +27,24 @@
 2. 登录后 getAppSalt 会被调用
 3. 用 runtime patching 捕获返回值
 
-### 方案 2: 逆向签名算法
+### 方案 2: 结构分析签名算法
 1. 分析 addBigModelSignatureHeaders (0x882680) 的完整流程
 2. 理解 getAppSalt 的 map 如何被用于签名计算
 3. 用 Python 复现签名算法
 
-### 方案 3: Hook HTTP 发送层
+### 方案 3: 动态拦截 HTTP 发送层
 1. 找到 net/http 发送函数
-2. Hook 它来拦截所有 HTTP 请求（包括签名后的）
+2. 动态拦截 它来拦截所有 HTTP 请求（包括签名后的）
 3. 直接读取 headers 中的签名值
 
 ### 方案 4: 启动时验证 runtime patching
-1. Hook runtime.newproc 或其他启动函数
+1. 动态拦截 runtime.newproc 或其他启动函数
 2. 验证 shellcode 可以正确执行
 3. 为后续更精确的 hook 铺路
 
 ## 推荐优先级
 
-**方案 3 (Hook HTTP 层)** > **方案 1 (登录)** > **方案 2 (逆向算法)** > **方案 4 (验证 patching)**
+**方案 3 (动态拦截 HTTP 层)** > **方案 1 (登录)** > **方案 2 (结构分析算法)** > **方案 4 (验证 patching)**
 
 理由:
 - 方案 3 最直接 — 如果签名是在 HTTP 请求中加的，hook HTTP 发送就能看到

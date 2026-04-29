@@ -38,7 +38,7 @@ Go 编译时函数按声明顺序排列:
 
 ## getAppSalt 函数行为分析
 
-0x882760 的 disassembly 显示:
+0x882760 的 结构还原 显示:
 1. 调用 0xa82c0 - 获取配置/客户端
 2. 位操作 (bt rax, 0x3f) - 检查某种标志
 3. 调用 0x9ea40 - 字符串操作
@@ -71,7 +71,7 @@ Go 编译时函数按声明顺序排列:
 - 远程端点: `https://lingma.alibabacloud.com/algo`
 - 远程端点: `https://lingma-api.tongyi.aliyun.com/algo`
 
-## Hook 脚本
+## 动态拦截 脚本
 
 已创建 `frida_hook_getappsalt.py` - 运行时 hook getAppSalt 并打印返回值。
 

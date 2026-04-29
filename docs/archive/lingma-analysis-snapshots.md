@@ -143,7 +143,7 @@
   - 通道真实存在
   - profile 页也真实存在
   - 但 raw HTTP 访问拿不到可直接复用的连接参数
-  - 有效 `state` 仍需从 plugin/webview 渲染链继续逆向
+  - 有效 `state` 仍需从 plugin/webview 渲染链继续协议研究
 
 ### 快照 12
 
@@ -648,7 +648,7 @@
 ### Token / Auth / Model Refresh
 
 - 当前 docs 已确认浏览器回调页拿到的是 `securityOauthToken + refreshToken + expireTime`。
-- 已有逆向笔记显示本地服务内部存在 `auth/syncUserInfo`、`auth/refreshToken`、`auth/report`、`config/refreshModels` 等链路。
+- 已有协议研究笔记显示本地服务内部存在 `auth/syncUserInfo`、`auth/refreshToken`、`auth/report`、`config/refreshModels` 等链路。
 - 登录成功后，本地服务会触发 endpoint/model refresh，再把用户态和模型态同步回 plugin。
 
 证据锚点：
@@ -677,7 +677,7 @@
 
 ## 待确认问题
 
-- 远端实际请求体是否可从日志、抓包或本地二进制进一步还原到字段级
+- 远端实际请求体是否可从日志、流量采集或本地二进制进一步还原到字段级
 - `securityOauthToken` 与远端调用使用的 `Authorization` 之间是否存在二次换票
 - 是否存在可直接复用的公开 endpoint，还是必须复用本地服务的签名/路由逻辑
 
@@ -722,7 +722,7 @@
 
 ### 快照 23
 
-- `auth/profile/getUrl` 与 `auth/profile/update` 作为 JSON-RPC/LSP 方法名，现在已经从 JAR 常量池拿到直接证据，不再只是从反编译调用链反推。
+- `auth/profile/getUrl` 与 `auth/profile/update` 作为 JSON-RPC/LSP 方法名，现在已经从 JAR 常量池拿到直接证据，不再只是从代码结构还原调用链反推。
 - 新增证据：
   - `javap -v lib/cosy-intellij-2.11.1.jar com.alibabacloud.intellij.cosy.core.lsp.model.LanguageServer`
   - 常量池直接出现：
@@ -1866,7 +1866,7 @@
 - 当前最准确的阶段性答案是：
   - 已经找到了一个“可直接编程调用”的本地 API 面
   - 但要真正做到“脱离本地程序直连远端 API”
-  - 还必须继续逆向 `Authorization + Cosy-*` 头与签名算法
+  - 还必须继续协议研究 `Authorization + Cosy-*` 头与签名算法
 
 ## 2026-04-24 第十四轮增量快照
 
@@ -2101,7 +2101,7 @@
 
 ### 快照 74
 
-- 本轮确认了当前一个现实阻塞：不能直接附加到正在运行的 `Lingma` 进程做动态 hook。
+- 本轮确认了当前一个现实阻塞：不能直接附加到正在运行的 `Lingma` 进程做动态 插桩观察。
 - 新增证据：
   - `lldb -p 4625` 返回：
     - `attach failed (Not allowed to attach to process ...)`
@@ -2169,7 +2169,7 @@
 - 当前最准确的阶段性结论已经可以写成：
   - 真正拦住“脱离本地程序直连远端 API”的，不是 plugin，也不是本地 `37010` 协议
   - 而是 macOS 上 `Lingma` 内嵌的 `SecurityGuardSDKManager` 这套 native 签名链
-- 当前分析工作已经把问题从“大范围逆向”压缩成一个非常小的剩余面：
+- 当前分析工作已经把问题从“大范围协议研究”压缩成一个非常小的剩余面：
   - 拿到 `SecurityGuardSDKManager -> UrlSign/DTSign/UMID/SecurityFactors` 的真实返回值和组合方式
 
 ## 2026-04-24 第十八轮增量快照
@@ -2494,13 +2494,13 @@
 ### 建议保留的替代落地方向
 
 - 方向 1：把 `37010` 封装成自己的稳定 API 层。
-  - 这是当前唯一已验证、可重复、无需继续逆向远端签名链的程序化入口。
+  - 这是当前唯一已验证、可重复、无需继续协议研究远端签名链的程序化入口。
   - 适合做本地 sidecar、CLI 包装层或自建转发服务。
 
 - 方向 2：优先寻找服务端官方支持的外部接入方式。
   - 现有材料能说明 plugin/login 参数层支持 `personalToken`、`AK/SK`、dedicated domain 等模式。
   - 但当前证据还不足以证明这些模式在你这套 `intl` 环境下可以直接替代 `big_model_endpoint` 的签名链。
-  - 因而若要实现“真正脱离本地程序直连远端”，更合理的路径应是官方支持的开放接口，而不是继续依赖客户端签名逆向。
+  - 因而若要实现“真正脱离本地程序直连远端”，更合理的路径应是官方支持的开放接口，而不是继续依赖客户端签名协议研究。
 
 - 方向 3：把本文档定位为“架构与证据沉淀”，而不是“远端绕过操作手册”。
   - 这样后续维护会更稳定。
@@ -2609,7 +2609,7 @@
     - 至少 `UMID` 与 `miniWua` 这两条能力已经被运行时真实调用证据坐实
 
 - 本轮还补了一条对 `Authorization` 结构的横向对照结论：
-  - 在同一批抓包样本中：
+  - 在同一批流量采集样本中：
     - `Authorization` 中段 `base64-json` 里的 `info` 只有 1 个唯一值
     - `Cosy-Key` 也只有 1 个唯一值
     - `Authorization` 中段整体会因为 `requestId` 字段变化而变化
@@ -2622,13 +2622,13 @@
   - 当前更合理的判断是：
     - `info` 与 `Cosy-Key` 更像会话级或环境级稳定材料
     - 真正的 per-request 签名更可能由 `requestId/date` 与稳定密钥材料共同生成
-  - 再结合后续新实例抓包，还可以进一步收敛成：
+  - 再结合后续新实例流量采集，还可以进一步收敛成：
     - 它们不是机器全局固定常量
     - 而是“单实例稳定、跨重启变化”的材料
     - 更像进程级 / 实例级安全上下文
 
 - 同一轮对更早期的 `signature` 头也补了一条边界判断：
-  - 当前抓包里至少看到了：
+  - 当前流量采集里至少看到了：
     - `heartbeat`
     - `user/status`
     - `user/login`
@@ -2649,7 +2649,7 @@
   - 再触发 `device_login + chat/ask`
 - 当前看到的结果是：
   - 新实例的 `Authorization.info` 与 `Cosy-Key` 相比上一实例整体发生了变化
-  - 但 override hook 本身没有出现自然命中日志
+  - 但 override 插桩观察 本身没有出现自然命中日志
   - 且真实请求头里：
     - `Cosy-MachineToken` 仍为空
     - `Cosy-MachineType` 仍为空
@@ -2752,7 +2752,7 @@
     - 把 `key` 改成全 `K`
     - 把 `encrypt_user_info` 改成全 `I`
     - 再按同样 `machineKey` 重新加密写回
-  - 新实例真实抓包结果直接变成：
+  - 新实例真实流量采集结果直接变成：
     - `Cosy-Key = KKK...`
     - `Authorization.info = III...`
   - 这已经足够把结论写死成：
@@ -2788,7 +2788,7 @@
     - 没有任何一组命中尾 32 位 hex
   - 这说明：
     - 尾签名不是这些显式字段的简单直接拼接 `md5`
-    - 后续若继续逆向，应优先怀疑：
+    - 后续若继续协议研究，应优先怀疑：
       - 额外隐藏输入
       - 中间编码步骤
       - 或更复杂的结构化签名基串
@@ -3212,12 +3212,12 @@
   - “脱离 plugin UI 调用模型” 已经成立
   - “脱离 Lingma 进程本体直连远端 HTTP/SSE” 仍然不能落成一个真实可用实现
 
-## 2026-04-24 第二十七轮 隔离 endpoint 抓包与真实远端头补证
+## 2026-04-24 第二十七轮 隔离 endpoint 流量采集与真实远端头补证
 
 ### 快照 104
 
-- 这轮先把“不要破坏当前主安装态”落实成一套隔离抓包实验。
-- 新增了本地抓包服务脚本：
+- 这轮先把“不要破坏当前主安装态”落实成一套隔离流量采集实验。
+- 新增了本地流量采集服务脚本：
   - `tools/lingma_capture_server.py`
 - 启动方式是：
   - `python .\tools\lingma_capture_server.py --port 18080 --log .\capture\lingma-http-capture.jsonl`
@@ -3270,7 +3270,7 @@
   - `info = ...`
   - `requestId = ...`
   - `version = v1`
-- 同一隔离实例的整轮抓包里：
+- 同一隔离实例的整轮流量采集里：
   - `info` 保持不变
     - `infoLen = 664`
     - `infoSha256` 前 16 位稳定为：
@@ -3349,7 +3349,7 @@
   - `modelKey`
   - `cosy_key`
 - 同时代码段附近还能看到对 `COSYENC1` 的直接比较/写入痕迹。
-- 这让当前逆向方向进一步收敛成：
+- 这让当前协议研究方向进一步收敛成：
   - `Encode=1` 很可能不是随便拼出来的文本协议
   - 更像 Lingma 主二进制内部的一种自定义编码容器
   - `COSYENC1` 可能就是它的 magic/version 标记
@@ -3418,7 +3418,7 @@
   - `cosy/remoting/definition.go`
   - `cosy/remoting/sse/client.go`
   - `cosy/remoting/sse/sse_client.go`
-- 因而当前逆向方向已经明确 pivot：
+- 因而当前协议研究方向已经明确 pivot：
   - 不再把 `COSYENC1` 当成主突破口
   - 主突破口改成：
     - `BuildBigModelSvcRequestWithConfig`
@@ -3643,7 +3643,7 @@
 - 因而当前能力边界已经可以明确改写为：
   - 对无 body 的 `/algo/api/v2/model/list`
     - 已经可以脱离 `Lingma` 进程直接调用
-  - 这不再只是“回放抓包”
+  - 这不再只是“回放流量采集”
   - 而是可由外部自行生成：
     - 新 `requestId`
     - 新 `Cosy-Date`
@@ -3693,7 +3693,7 @@
   - `id = 5930676910898027`
   - `token = pt-5zmkcs3cUpPGP8FGb88WGkSJ`
   - `refreshToken = rt-gHWjpgS9NQ4TOhmtvmN55ELZ`
-- 因而后续所有“隔离实例 + 动态 hook + 带登录态复现”场景，当前更稳的启动策略应改成：
+- 因而后续所有“隔离实例 + 动态 插桩观察 + 带登录态复现”场景，当前更稳的启动策略应改成：
   - 直接克隆旧 workdir
   - 不再把 `--copyDataDir` 当成登录态迁移的可靠手段
 
@@ -3749,7 +3749,7 @@
   - `whitelist = 3`
   - `privacyPolicyAgreed = true`
 - 本地 `config/queryModels` 也已再次返回完整模型注册表。
-- 这说明当前已经拿到一个比“纯 stub”更适合继续逆向的环境：
+- 这说明当前已经拿到一个比“纯 stub”更适合继续协议研究的环境：
   - 远端真实逻辑继续跑
   - 本地仍能完整抓出站请求
 
@@ -3878,7 +3878,7 @@
     - `config/queryModels`
       - 返回完整模型注册表
 
-- 这轮新的聊天抓包文件：
+- 这轮新的聊天流量采集文件：
   - `capture/lingma-http-capture-proxynofrida-20260424-235500.jsonl`
   再次坐实：
   - `chat/ask.requestId = b75778fc025b4dbebf5cfde250534dd0`
@@ -4403,7 +4403,7 @@
   - 两次大 `tracking` 包内部仍然共享大量稳定子结构
   - 更像同一种 tracker/report 批量模板的两个实例
 
-- 再和同一份抓包里的聊天主请求对照：
+- 再和同一份流量采集里的聊天主请求对照：
   - 文件：
     - `capture/lingma-http-capture-proxynofrida-20260424-235500.jsonl`
   - 对比对象：

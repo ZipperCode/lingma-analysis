@@ -133,7 +133,7 @@ Cosy-Version: 2.11.1
 - **POST 签名**: `md5(payload + "\n" + Cosy-Key + "\n" + Cosy-Date + "\n" + body + "\n" + normalized_path)`
   - 注意: slot4 = 完整的 HTTP body（包含 `$` 分隔符）
 
-1. **编码是可逆的**: 自定义 base64 字母表的位置映射已完全破解
+1. **编码是可逆的**: 自定义 base64 字母表的位置映射已完全推导
 2. **JSON 部分可独立构造**: messages 数组和 business 对象的结构已完全理解
 3. **二进制部分可能是可选的**: 需要验证是否可以不带二进制数据发送请求
 4. **签名可独立计算**: Bearer token 的 md5 签名公式已知

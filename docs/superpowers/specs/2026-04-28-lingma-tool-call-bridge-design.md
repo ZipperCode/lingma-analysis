@@ -8,7 +8,7 @@
 在现有 lingma2api OpenAI 兼容代理的基础上，扩展支持：
 
 - **OpenAI 工具调用**：接受 `tools` 参数，透传 `tool_calls`/`tool` 角色消息，在 SSE 流中解析并回传工具调用增量
-- **Lingma 内置工具逆向**：通过 Frida 逐步发现 Lingma IDE 原生工具能力并映射为 OpenAI 工具定义
+- **Lingma 内置工具协议研究**：通过 Frida 逐步发现 Lingma IDE 原生工具能力并映射为 OpenAI 工具定义
 - **Anthropic 格式**（后续）：在 OpenAI 跑通后，基于统一的 Message IR 添加 Anthropic `/v1/messages` 端点
 
 ## 2. 架构
@@ -135,7 +135,7 @@ type ToolDefinition struct {
 }
 ```
 
-Phase 1 注册表为空，所有工具透传。Phase 3 逆向出内置工具后填充注册表。
+Phase 1 注册表为空，所有工具透传。Phase 3 协议研究出内置工具后填充注册表。
 
 ## 7. Phase 计划
 

@@ -31,29 +31,29 @@
 - Interceptor.attach/replace 和 Stalker 都与 Go 1.23 GC 冲突
 - 导致 `runtime.scanstack` fatal error
 
-### 5. Runtime Patch 问题
+### 5. 运行期补丁 问题
 - JMP 补丁安装成功但 getAppSalt 从未被调用
-- Shellcode 执行验证脚本 (verify_shellcode.py) 显示标记值始终为 0
+- 机器码 执行验证脚本 (verify_shellcode.py) 显示标记值始终为 0
 
-## 新的攻击策略
+## 新的分析策略
 
 ### 策略 A: 触发 getAppSalt 调用
 1. 通过 LSP pipe 发送需要签名的请求
 2. 分析 caller 函数 (0x880da0) 的触发条件
 3. 模拟满足条件的请求
 
-### 策略 B: Hook 会实际执行的函数
+### 策略 B: 动态拦截 会实际执行的函数
 1. 查找并 hook 启动时会调用的配置加载函数
-2. Hook cosy/config.parseBigModelHost
-3. Hook cosy/remoting.GetBigModelEndpoint
+2. 动态拦截 cosy/config.parseBigModelHost
+3. 动态拦截 cosy/remoting.GetBigModelEndpoint
 
 ### 策略 C: 直接提取配置并计算签名
 1. 从 binary 提取的配置 JSON 已包含所有必要信息
 2. 已知 keys: "Date", "Signature", "Appcode"
 3. 分析签名算法，用提取的配置直接计算
 
-### 策略 D: Hook HTTP 层
-1. Hook net/http.(*Client).Do 或 net/http.(*Transport).roundTrip
+### 策略 D: 动态拦截 HTTP 层
+1. 动态拦截 net/http.(*Client).Do 或 net/http.(*Transport).roundTrip
 2. 拦截所有发出的 HTTP 请求
 3. 读取已签名的 headers
 

@@ -15,13 +15,13 @@ import (
 const (
 	// Note: The remote login API is not directly callable from outside Lingma.
 	// The body encoding (Encode=2 per login_encode config, AES encrypt with unknown key)
-	// has not been reverse-engineered. All direct attempts return 500.
+	// has not been fully analyzed. All direct attempts return 500.
 	// Use the WebSocket RPC (RefreshTokensViaWebSocket) or OAuth flow instead.
 	userLoginURL    = "https://lingma-api.tongyi.aliyun.com/algo/api/v3/user/login?Encode=1"
 	userLoginAESKey = "QbgzpWzN7tfe43gf"
 
 	// OldSignatureKey is the session_key for old Signature flow (addBigModelSignatureHeaders).
-	// Extracted via static disassembly of Lingma v2.11.1: the key is conditionally selected
+	// Extracted via static code structure analysis of Lingma v2.11.1: the key is conditionally selected
 	// between this base64 literal and &Q3C3!N5mP5bbNcyryMY@KZtUFLRGbTe, controlled by a
 	// byte flag in .data. The base64 form decodes to "war, war never changes".
 	// Formula: MD5("cosy&" + key + "&" + RFC1123_date). Verified against 1 captured oracle.
@@ -167,7 +167,7 @@ func buildSignatureStrategies(sessionKey string) []signatureStrategy {
 	for _, key := range keys {
 		k := key
 
-		// Formula extracted via static disassembly of addBigModelSignatureHeaders:
+		// Formula extracted via static code structure analysis of addBigModelSignatureHeaders:
 		// MD5("cosy" + "&" + key + "&" + RFC1123_date)
 		// The "&" is the join character used by the string-join+MD5 function @ RVA 0x4563C0
 		preimage := "cosy&" + k + "&" + rfc1123

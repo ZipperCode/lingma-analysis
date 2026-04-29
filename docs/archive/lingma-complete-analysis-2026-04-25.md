@@ -1,10 +1,10 @@
-# Lingma 逆向工程 - 完整分析报告
+# Lingma 协议研究工程 - 完整分析报告
 
 > 分析日期: 2026-04-25
 > 目标版本: cosy 2.11.1
 > 目标平台: Windows x86_64
 
-本文档是 Lingma 逆向工程的单一权威参考。所有结论均来自实际抓包、Frida 追踪、二进制分析和运行时验证。
+本文档是 Lingma 协议研究工程的单一权威参考。所有结论均来自实际流量采集、Frida 追踪、程序结构分析和运行时验证。
 
 ---
 
@@ -380,24 +380,24 @@ Python `requests` 库的 TLS 指纹被服务器拒绝（403）。`curl` 和 `pyc
 
 2. **TLS 指纹**：Python `requests` 被服务器 403 拒绝。必须使用 `curl` 子进程或 TLS 指纹伪装。
 
-3. **二进制载荷来源**：可能是加密的代码上下文、嵌入向量或设备遥测数据。需要 Frida hook `encodeRequestBody` 或 `shouldEncryptBody` 来完全理解其生成方式。
+3. **二进制载荷来源**：可能是加密的代码上下文、嵌入向量或设备遥测数据。需要 Frida 插桩观察 `encodeRequestBody` 或 `shouldEncryptBody` 来完全理解其生成方式。
 
 ### 仍未完全解决的问题
 
 | 问题 | 状态 |
 |------|------|
-| 自定义 base64 字母表 | ✅ 已破解 |
-| Bearer 签名公式 | ✅ 已破解 |
-| cache/user 解密 | ✅ 已破解 |
+| 自定义 base64 字母表 | ✅ 已解析 |
+| Bearer 签名公式 | ✅ 已解析 |
+| cache/user 解密 | ✅ 已解析 |
 | GET 端点直连 | ✅ 可用 |
 | POST 端点直连（仅改用户消息） | ✅ 可用 |
-| 独立生成二进制载荷 | ❌ 需要 Frida hook |
+| 独立生成二进制载荷 | ❌ 需要 Frida 插桩观察 |
 | TLS 指纹伪装 | ⚠️ curl 可用，纯 Python 不行 |
 | 自由修改系统提示词 | ❌ 与二进制载荷绑定 |
 
 ### 下一步建议
 
-1. **Frida hook `cosy/remoting.encodeRequestBody`** — 分析二进制载荷生成
+1. **Frida 插桩观察 `cosy/remoting.encodeRequestBody`** — 分析二进制载荷生成
 2. **尝试不同 system prompt 的捕获数据** — 理解二进制载荷与文本的绑定关系
 3. **TLS 指纹伪装** — 使用 `curl-impersonate` 或自定义 TLS 配置实现纯 Python 请求
 4. **探索不带二进制载荷的请求** — 验证是否可以省略 `$binary_part`

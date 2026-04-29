@@ -36,7 +36,7 @@
 专项主题保留在 [`topics/`](./topics/) 下，适合按问题深挖，不再和主线入口并列：
 
 - [topics/encode1-complete-analysis.md](./topics/encode1-complete-analysis.md)
-- [topics/encoding-alphabet-cracked.md](./topics/encoding-alphabet-cracked.md)
+- [topics/encoding-alphabet-decoded.md](./topics/encoding-alphabet-decoded.md)
 - [topics/encryption-analysis.md](./topics/encryption-analysis.md)
 - [topics/encryption-status.md](./topics/encryption-status.md)
 - [topics/heartbeat-body-structure.md](./topics/heartbeat-body-structure.md)

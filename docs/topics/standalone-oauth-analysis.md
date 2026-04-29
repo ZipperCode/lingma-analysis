@@ -11,7 +11,7 @@
 灵码二进制中**没有硬编码的 `client_id`**。所有的 OAuth 操作通过灵码服务端 API 完成，`client_id` 仅在服务端存在。
 
 **已排除的路径：**
-- 二进制静态分析：无硬编码值
+- 程序结构静态分析：无硬编码值
 - 配置文件（`~/.lingma/cache/*`）：无
 - WebSocket 方法：无法获取
 - 浏览器 302 重定向链：未直接暴露给客户端
@@ -50,7 +50,7 @@ No active device token polling to stop
 | 层 | 端点版本 | 认证方式 | 编码 |
 |---|---|---|---|
 | v1 API（心跳/tracking） | `/algo/api/v1/*` | 旧签名（Date + Signature） | Encode=1（纯自定义 base64） |
-| v3 API（认证/token） | `/algo/api/v3/*` | 旧签名（Date + Signature） | Encode=2（未知，待逆向） |
+| v3 API（认证/token） | `/algo/api/v3/*` | 旧签名（Date + Signature） | Encode=2（未知，待还原） |
 | v2 API（模型/对话） | `/algo/api/v2/*` | COSY Bearer | 无 Encode |
 
 ---
@@ -67,9 +67,9 @@ Signature = MD5("cosy&" + session_key + "&" + RFC1123_date)
 - `RFC1123_date` = `Wed, 29 Apr 2026 05:02:30 GMT` 格式
 - 备用 key: `&Q3C3!N5mP5bbNcyryMY@KZtUFLRGbTe`
 
-**验证方法：** 回放截获的心跳请求，签名完全匹配。
+**验证方法：** 回放采集的心跳请求，签名完全匹配。
 
-### 2.2 Encode=1 编码（已完全逆向 ✅）
+### 2.2 Encode=1 编码（已完全还原 ✅）
 
 Encode=1 是**自定义 base64 编码**，不使用 AES 加密。
 
@@ -99,11 +99,11 @@ def lingma_encode(data: bytes) -> str:
     return b2 + ('$' * pad) + b1 + b0
 ```
 
-**验证方法：** 编码灵码二进制截获的心跳 JSON，输出与二进制发送的完全一致（912 字节逐字节匹配）。
+**验证方法：** 编码灵码二进制采集的心跳 JSON，输出与二进制发送的完全一致（912 字节逐字节匹配）。
 
 ### 2.3 请求头格式（已验证 ✅）
 
-灵码二进制使用 **CamelCase 头部名**（通过 mitmproxy 截获确认）：
+灵码二进制使用 **CamelCase 头部名**（通过 mitmproxy 采集确认）：
 
 ```
 User-Agent: Go-http-client/1.1
@@ -279,7 +279,7 @@ v3 HTTP 端点是灵码服务端用于标准 OAuth token 刷新的接口，但�
 
 ### 4.3 Encode=1 v1 端点（新发现，可用）
 
-v1 端点使用 Encode=1（纯自定义 base64），已完全逆向。可用于：
+v1 端点使用 Encode=1（纯自定义 base64），已完全还原。可用于：
 - 心跳（heartbeat）
 - 事件追踪（tracking）
 - 其他 v1 端点
@@ -288,18 +288,18 @@ v1 端点使用 Encode=1（纯自定义 base64），已完全逆向。可用于�
 
 ## 5. 后续计划
 
-### 优先级 1：逆向 Encode=2
+### 优先级 1：还原 Encode=2
 
-**方法 A：截获二进制请求**
+**方法 A：采集二进制请求**
 ```bash
 # 1. 确保灵码 token 已过期（或手动使 cache/user 中的 token 失效）
 # 2. 启动 mitmproxy：mitmdump -s /tmp/lingma_intercept.py -p 8083
 # 3. 设置代理：export HTTP_PROXY=http://127.0.0.1:8083
 # 4. 重启灵码，等待 refresh 请求
-# 5. 分析截获的 refresh_token 请求 body
+# 5. 分析采集的 refresh_token 请求 body
 ```
 
-**方法 B：二进制逆向**
+**方法 B：程序结构分析**
 - 分析 `cosy/auth/user/doRefreshToken` 函数
 - 查找 Encode=2 相关的编码/加密函数
 - 可能需要 Ghidra 或 IDA Pro
@@ -314,7 +314,7 @@ v1 端点使用 Encode=1（纯自定义 base64），已完全逆向。可用于�
 
 - 将验证过的编码算法集成到 Go 代码
 - 实现独立的 v1 API 调用
-- 等 Encode=2 逆向完成后实现 v3 API 调用
+- 等 Encode=2 结构分析完成后实现 v3 API 调用
 
 ---
 
@@ -347,11 +347,11 @@ lingma2api/internal/auth/bootstrap.go       - 登录 URL 构造
 lingma_remote_api.py                        - Python 远程 API 客户端
 ```
 
-### 截获的数据
+### 采集的数据
 
 ```
-/tmp/lingma_captures/req_*.txt   - 截获的完整请求
-/tmp/lingma_captures/resp_*.txt  - 截获的完整响应
+/tmp/lingma_captures/req_*.txt   - 采集的完整请求
+/tmp/lingma_captures/resp_*.txt  - 采集的完整响应
 /tmp/lingma_creds.json           - 最新缓存凭证
 ```
 
@@ -393,7 +393,7 @@ CN:  lingma-api.tongyi.aliyun.com/algo
 Intl: lingma.alibabacloud.com/algo
 ```
 
-### 代理配置（用于截获请求）
+### 代理配置（用于采集请求）
 
 ```json
 // ~/.lingma/cache/app-config.json

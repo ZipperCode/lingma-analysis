@@ -43,7 +43,7 @@ client_id 在第 3 步的 URL 参数中。**无法在无浏览器交互的情况
 
 ### 核心结论
 
-**session_key 公式未破解**。进行了以下尝试：
+**session_key 公式未解析**。进行了以下尝试：
 
 #### 二进制字符串提取
 
@@ -72,8 +72,8 @@ client_id 在第 3 步的 URL 参数中。**无法在无浏览器交互的情况
 
 #### 未尝试的路径
 
-1. **Ghidra/IDA arm64 反编译** — 定位 macOS 二进制中 `addBigModelSignatureHeaders`，追踪 key 加载指令到具体 `.rodata` 偏移
-2. **Frida 动态 hook** — 需先对 macOS 二进制做 ad-hoc 重签名 (`codesign --remove-signature && codesign -s -`)
+1. **Ghidra/IDA arm64 代码结构还原** — 定位 macOS 二进制中 `addBigModelSignatureHeaders`，追踪 key 加载指令到具体 `.rodata` 偏移
+2. **Frida 动态 插桩观察** — 需先对 macOS 二进制做 ad-hoc 重签名 (`codesign --remove-signature && codesign -s -`)
 3. **已知 (Date, Signature) 字典攻击** — 从运行中 Lingma 捕获真实 heartbeat 请求，用该对反推
 
 ### 已知的 (Date, Signature) 验证对
@@ -133,15 +133,15 @@ go run ./cmd/lingma-auth-bootstrap \
 
 实现细节见 `docs/topics/refresh-token-flow.md`。
 
-## 5. 方案 E：session_key 破解（Stage B 进行中）
+## 5. 方案 E：session_key 解析（Stage B 进行中）
 
 已建立三条并行路径：
 
-1. **B3（Frida hook）**：`tools/md5encode_dump.js` hook `code.alibaba-inc.com/cosy/encrypt.Md5Encode`
+1. **B3（Frida 插桩观察）**：`tools/md5encode_dump.js` 插桩观察 `code.alibaba-inc.com/cosy/encrypt.Md5Encode`
 2. **B2（字典攻击）**：`tools/session_key_oracle.py` 枚举候选 key × 公式，用 3 组已知 oracle 交叉验证
-3. **B1（静态反编译）**：IDA/Ghidra 从 `addBigModelSignatureHeaders` 向下追踪 key 的 `.rodata` 偏移
+3. **B1（静态代码结构还原）**：IDA/Ghidra 从 `addBigModelSignatureHeaders` 向下追踪 key 的 `.rodata` 偏移
 
-详细过程见 `docs/topics/session-key-cracking.md`。
+详细过程见 `docs/topics/session-key-analysis.md`。
 
 ## 6. 关键文件索引
 
@@ -153,10 +153,10 @@ go run ./cmd/lingma-auth-bootstrap \
 | `internal/auth/credential_derive.go` | Lingma Bridge 凭据派生 |
 | `cmd/lingma-auth-bootstrap/main.go` | Bootstrap CLI，支持 `--use-lingma`、`--session-key`、`--capture-client-id`、`--refresh` |
 | `tools/forge_signing.py` | 二进制提取的 SECRET_FULL 字符串 |
-| `tools/getappsalt_analysis_v2.md` | addBigModelSignatureHeaders 反编译分析 |
-| `tools/md5encode_dump.js` | Frida hook Md5Encode（B3 主路径） |
+| `tools/getappsalt_analysis_v2.md` | addBigModelSignatureHeaders 代码结构还原分析 |
+| `tools/md5encode_dump.js` | Frida 插桩观察 Md5Encode（B3 主路径） |
 | `tools/session_key_oracle.py` | 字典攻击 + 交叉验证（B2 fallback） |
 | `docs/lingma-analysis-endpoint-auth.md` | 两套签名系统完整文档 |
 | `docs/topics/client-id-extraction.md` | Stage A 过程文档 |
 | `docs/topics/refresh-token-flow.md` | Stage C 过程文档 |
-| `docs/topics/session-key-cracking.md` | Stage B 过程文档 |
+| `docs/topics/session-key-analysis.md` | Stage B 过程文档 |

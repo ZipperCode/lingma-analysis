@@ -45,9 +45,9 @@
 - 当前已坐实两层远端路径：
   - 直接命中验证过的 SSE：
     - `https://lingma.alibabacloud.com/algo/api/v2/service/pro/sse/llm_completion_stream?FetchKeys=&Encode=1`
-  - `chat/ask` 主聊天链真实抓包到的：
+  - `chat/ask` 主聊天链真实流量采集到的：
     - `POST /algo/api/v2/service/pro/sse/agent_chat_generation?FetchKeys=llm_model_result&AgentId=agent_common&Encode=1`
-- 同一轮抓包还补齐了：
+- 同一轮流量采集还补齐了：
   - `GET /algo/api/v1/ping`
   - `POST /algo/api/v1/heartbeat?Encode=1`
   - `POST /algo/api/v3/user/status?Encode=1`
@@ -151,7 +151,7 @@
   - `Cosy-MachineId`
   - `Cosy-MachineOS`
   - `X-Request-ID`
-- 对同一批抓包继续做横向比对后，当前更稳的判断是：
+- 对同一批流量采集继续做横向比对后，当前更稳的判断是：
   - `Authorization` 中段 `base64-json` 里的 `info` 在同一批请求里是稳定常量
   - `Cosy-Key` 在同一批请求里也是稳定常量
   - 真正每请求变化的是：
@@ -159,7 +159,7 @@
     - `Authorization` 末尾 32 位 hex
     - `Cosy-Date`
 - 这说明：
-  - 后续继续逆向时，不该再优先怀疑 `info` 是“每请求现算”的主体
+  - 后续继续协议研究时，不该再优先怀疑 `info` 是“每请求现算”的主体
   - 更应优先怀疑 `requestId/date + 某个稳定密钥材料` 的组合签名链
 - 但跨实例对照又补了一层结论：
   - 换一个新的 `Lingma` 实例和 `workDir` 后，`info` 与 `Cosy-Key` 都会整体变化
@@ -280,7 +280,7 @@
   - 当前仍然全部不命中尾 32 位 hex
 - 这说明：
   - 尾签名也不是“可见字段 + 简单 HMAC”的直接模型
-  - 后续若继续逆向，应优先怀疑：
+  - 后续若继续协议研究，应优先怀疑：
     - 额外隐藏输入
     - 结构化签名基串
     - 或 `code.alibaba-inc.com/cosy/encrypt` 里的自定义编码步骤
@@ -546,7 +546,7 @@
 
 ### plugin 侧当前只看到“入口和辅助动作”，没有看到真正的注册实现
 
-对 `lib/cosy-intellij-2.11.1.jar` 做反编译后，当前和 MCP 直接相关的 plugin 侧证据已经可以进一步收敛：
+对 `lib/cosy-intellij-2.11.1.jar` 做代码结构还原后，当前和 MCP 直接相关的 plugin 侧证据已经可以进一步收敛：
 
 - `LingmaToolWindowPanel`
   - `openMcpTool()`
@@ -817,7 +817,7 @@
 这层当前最关键的函数已经坐实：
 
 - `trimQueryPath`
-  - 会把抓包里的 `/algo/...` 归一成签名使用的 `/api/...`
+  - 会把流量采集里的 `/algo/...` 归一成签名使用的 `/api/...`
 - `shouldAddEncodeParam`
   - 决定 URL 上要不要补 `Encode=1`
 - `shouldEncryptBody`
@@ -1010,7 +1010,7 @@
 
 ### 早期 `signature` 头的当前边界
 
-- 自定义 endpoint 抓包还能看到一条更早期的 `signature` 头链，主要出现在：
+- 自定义 endpoint 流量采集还能看到一条更早期的 `signature` 头链，主要出现在：
   - `POST /algo/api/v1/heartbeat?Encode=1`
   - `POST /algo/api/v3/user/status?Encode=1`
   - `POST /algo/api/v3/user/login?Encode=1`
@@ -1291,13 +1291,13 @@
 - 异步回包方法已经明确
 - 真正仍未解决的只是“脱离 Lingma 进程以后如何自己复刻远端签名与编码链”
 
-## 隔离 endpoint 抓包补证
+## 隔离 endpoint 流量采集补证
 
 ### 当前已经能安全抓到 Lingma 本体的真实出站 HTTP
 
 这轮没有去动当前正在使用的 `C:\Users\Zipper\.lingma` 主实例，而是新起了一份隔离副本：
 
-- 启动本地抓包服务：
+- 启动本地流量采集服务：
   - `python .\tools\lingma_capture_server.py --port 18080 --log .\capture\lingma-http-capture.jsonl`
 - 启动隔离 Lingma：
   - `Lingma.exe start --workDir D:\Project\lingma\capture\workdir-18080 --copyDataDir C:\Users\Zipper\.lingma --socketPort 37011 --httpPort 37511 --endpoint http://127.0.0.1:18080`
@@ -1361,11 +1361,11 @@
 
 并且同一隔离实例内已经能直接对出这些关系：
 
-- `info` 在整轮抓包中保持不变
+- `info` 在整轮流量采集中保持不变
   - `infoLen = 664`
   - `infoSha256` 前 16 位稳定为：
     - `4a6f229b26eb37b4`
-- `Cosy-Key` 在整轮抓包中也保持不变
+- `Cosy-Key` 在整轮流量采集中也保持不变
 - 每个远端请求都会生成新的 bearer 内嵌 `requestId`
 - bearer 尾部 32 位 hex 也会随请求变化
 
@@ -1418,7 +1418,7 @@
 
 ### `Encode=1` 的 body 仍是当前直连的硬阻塞
 
-这轮抓包已经把“远端 body 不是普通 JSON”也直接坐实了。
+这轮流量采集已经把“远端 body 不是普通 JSON”也直接坐实了。
 
 当前已抓到的聊天请求体特征包括：
 
@@ -1816,7 +1816,7 @@
 
 因此当前对 bearer 签名链的更稳判断是：
 
-- 真正进入签名拼接的不是抓包里看到的原始 `/algo/...`
+- 真正进入签名拼接的不是流量采集里看到的原始 `/algo/...`
 - 而是归一化后的：
   - `/api/...`
 
@@ -1863,7 +1863,7 @@
 - `Cosy-Date`：
   - `1777038686`
 - `Cosy-Key`：
-  - 抓包与 trace 完全一致
+  - 流量采集与 trace 完全一致
 - `getAuthSignature.enter`
   - `rax_rbx`
     - bearer 中段 payload
@@ -1912,7 +1912,7 @@ PowerShell 独立复算结果也已命中：
 - 第四槽位当前不能直接等同于：
   - `Cosy-Data-Policy`
 
-再结合同批抓包里：
+再结合同批流量采集里：
 
 - `Cosy-Organization-Id == ""`
 - `Cosy-Organization-Tags == ""`
@@ -2038,7 +2038,7 @@ PowerShell 独立复算结果也已命中：
 
 ## 隔离启动的新约束
 
-这轮还补出一个对后续逆向很关键的运行约束：
+这轮还补出一个对后续协议研究很关键的运行约束：
 
 - 直接用：
   - `Lingma.exe start --workDir <new> --copyDataDir C:\Users\Zipper\.lingma ...`
@@ -2059,7 +2059,7 @@ PowerShell 独立复算结果也已命中：
 - `token = pt-5zmkcs3cUpPGP8FGb88WGkSJ`
 - `refreshToken = rt-gHWjpgS9NQ4TOhmtvmN55ELZ`
 
-这说明对于后续所有“隔离实例 + 动态 hook + 带登录态复现”场景，当前更稳的做法应该是：
+这说明对于后续所有“隔离实例 + 动态 插桩观察 + 带登录态复现”场景，当前更稳的做法应该是：
 
 - 不要依赖 `--copyDataDir` 迁移用户态
 - 直接克隆一个已落地过 `cache/user` 的 workdir 再启动
@@ -2096,7 +2096,7 @@ PowerShell 独立复算结果也已命中：
 - `config/queryModels`
   - 再次返回完整模型注册表
 
-这说明当前已经拿到一个比“静态 stub”更适合继续逆向的环境：
+这说明当前已经拿到一个比“静态 stub”更适合继续协议研究的环境：
 
 - 远端真实逻辑继续跑
 - 本地仍可完整抓到所有出站请求
@@ -2389,7 +2389,7 @@ PowerShell 独立复算结果也已命中：
   - `capture/workdir-proxynofrida-20260424-235210/logs/lingma.log`
     - 明确出现：
       - `No cached user info, please login.`
-- 抓包：
+- 流量采集：
   - `capture/lingma-http-capture-proxynofrida-20260424-235210.jsonl`
     - 只剩：
       - `ping`
@@ -2449,7 +2449,7 @@ PowerShell 独立复算结果也已命中：
     - `lo`
     - `!`
 
-这轮对应的新抓包文件是：
+这轮对应的新流量采集文件是：
 
 - `capture/lingma-http-capture-proxynofrida-20260424-235500.jsonl`
 
@@ -2614,7 +2614,7 @@ PowerShell 独立复算结果也已命中：
 
 证据有三层。
 
-第一层，抓包里的 header 家族已经明显分叉。
+第一层，流量采集里的 header 家族已经明显分叉。
 
 在所有已确认的聊天主链与聊天 side-band 请求里：
 
@@ -2947,7 +2947,7 @@ PowerShell 独立复算结果也已命中：
 
 ### 当前两次 `15/15 events` 大包已经能和 `tracking` body 的规模稳定对上
 
-这一步虽然还没拿到 pre-encode 明文，但至少能把“日志中的 event 数”和“抓包中的 body 规模”稳定对账。
+这一步虽然还没拿到 pre-encode 明文，但至少能把“日志中的 event 数”和“流量采集中的 body 规模”稳定对账。
 
 两次最关键的样本分别是：
 
@@ -3321,7 +3321,7 @@ PowerShell 独立复算结果也已命中：
   - 成功 flush 后内容会被快速清空
 - 因而单靠事后磁盘取证
   - 很难直接还原 `tracking` 最外层 envelope
-  - 后续如果要再前进一步，仍然更适合走运行时 hook
+  - 后续如果要再前进一步，仍然更适合走运行时 插桩观察
     - 抓 `buildCommitItemsJSON`
     - 或抓 `Encode=1` 之前的上层对象
 
@@ -3450,7 +3450,7 @@ PowerShell 独立复算结果也已命中：
 - 所以它们更像“同一种 tracker/report 批量模板在不同请求实例下的两个样本”
   - 而不是两个完全不同的上层协议偶然都走到了 `tracking`
 
-再把它和同一批抓包中的聊天主请求做对照。以 `capture/lingma-http-capture-proxynofrida-20260424-235500.jsonl` 中首个 `agent_chat_generation` body 为例：
+再把它和同一批流量采集中的聊天主请求做对照。以 `capture/lingma-http-capture-proxynofrida-20260424-235500.jsonl` 中首个 `agent_chat_generation` body 为例：
 
 - `tracking` body 长度：`18232`
 - `agent_chat_generation` body 长度：`11592`

@@ -281,7 +281,7 @@
   - 不应假设它能直接从 `SecurityGuard` 的简单 KV 接口里读到
 - 同时还可以再补一句边界：
   - 即使 `machine-info` 已能返回 `machineToken/machineType`
-  - 当前真实抓包里的远端请求头 `Cosy-MachineToken/Cosy-MachineType` 仍然始终为空
+  - 当前真实流量采集里的远端请求头 `Cosy-MachineToken/Cosy-MachineType` 仍然始终为空
   - 因而不能把 `machine-info` 的输出简单等同于 HTTP 头最终出站值
 
 ## user/quota 缓存与实例级安全材料的关系
@@ -319,7 +319,7 @@
   - `Cosy-Key` 与 `Authorization.info` 一起恢复到旧基线
 - 因而当前更稳的结论是：
   - `cache/user` 已经从“高相关”升级为“关键入口”
-  - 后续若继续逆向，应优先围绕它的解密、校验与装载流程
+  - 后续若继续协议研究，应优先围绕它的解密、校验与装载流程
 
 ### `cache/user` 的格式侧观察
 
@@ -417,7 +417,7 @@
 
 - `cache/user` 对实例级安全材料的影响不是“只看某一个简单尾部字段”。
 - 至少从当前实验看，它更像跨多个区块共同参与派生。
-- 因而若继续逆向，不应假设存在“单个小字段直接等于 `Cosy-Key/info`”这种过度简化模型。
+- 因而若继续协议研究，不应假设存在“单个小字段直接等于 `Cosy-Key/info`”这种过度简化模型。
 
 ## miniWua 与 SecurityFactors 运行时探测
 
@@ -644,11 +644,11 @@
 - `securityOauthToken` 到最终 bearer 的精确映射关系
 - token 与机器态、签名态如何组合成远端请求头
 
-## 隔离 endpoint 抓包后的头字段关系补证
+## 隔离 endpoint 流量采集后的头字段关系补证
 
 ### 当前已经把 bearer 中段 JSON 直接解开
 
-这轮通过隔离 endpoint 抓包后，已经能直接从真实远端请求头里把：
+这轮通过隔离 endpoint 流量采集后，已经能直接从真实远端请求头里把：
 
 - `Authorization: Bearer COSY.<base64-json>.<32hex>`
 
@@ -697,7 +697,7 @@
 
 ### `chat/ask.requestId` 与 `bearer.requestId` 不是同一个字段
 
-这轮隔离抓包把一个之前容易混淆的点彻底拆开了。
+这轮隔离流量采集把一个之前容易混淆的点彻底拆开了。
 
 对聊天主链：
 
@@ -729,7 +729,7 @@
 - `refreshToken`
 - `expireTime`
 
-也已经把 bearer 中段 JSON、`Cosy-Key`、`X-Request-Id` 关系补实了，但这轮抓包也进一步证明：
+也已经把 bearer 中段 JSON、`Cosy-Key`、`X-Request-Id` 关系补实了，但这轮流量采集也进一步证明：
 
 - 仅有 `token` 还不等于最终可重放的远端 `Authorization`
 - 仅有 `token + Cosy-Key + info` 也还不够

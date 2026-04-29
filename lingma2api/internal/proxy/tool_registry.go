@@ -2,7 +2,7 @@ package proxy
 
 // ToolRegistry holds known Lingma built-in tools.
 // Phase 1: empty — all tools are transparently passed through.
-// Phase 3: populated with reverse-engineered Lingma IDE tools.
+// Phase 3: populated with analyzed Lingma IDE tools.
 type ToolRegistry struct {
 	tools map[string]ToolDefinition
 }

@@ -35,7 +35,7 @@ var (
 )
 
 func main() {
-	fmt.Println("=== Encoding Cracker for /api/v3/user/refresh_token ===\n")
+	fmt.Println("=== Encoding Analyzer for /api/v3/user/refresh_token ===\n")
 
 	// Build the JSON body
 	body := map[string]interface{}{

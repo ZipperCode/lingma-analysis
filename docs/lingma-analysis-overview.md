@@ -82,8 +82,8 @@
 
 ### 4. `tools/` 目录里大量编号脚本是历史实验，不是当前事实源
 
-- `frida_hook_v7` 到 `frida_hook_v15`
-- `frida_hook_appsalt_v2` 到 `frida_hook_appsalt_v7`
+- `frida_插桩观察_v7` 到 `frida_插桩观察_v15`
+- `frida_插桩观察_appsalt_v2` 到 `frida_插桩观察_appsalt_v7`
 - `analyze_heartbeat2` 到 `analyze_heartbeat6`
 - `patch_getappsalt_v2` / `v3`
 - 各类 `test_*`、`final_*`、`*_analysis*`
@@ -111,7 +111,7 @@
 
 ### 3. 最后再看专项细节
 
-- [topics/encoding-alphabet-cracked.md](./topics/encoding-alphabet-cracked.md)
+- [topics/encoding-alphabet-decoded.md](./topics/encoding-alphabet-decoded.md)
 - [topics/encryption-analysis.md](./topics/encryption-analysis.md)
 - [archive/lingma-analysis-snapshots.md](./archive/lingma-analysis-snapshots.md)
 

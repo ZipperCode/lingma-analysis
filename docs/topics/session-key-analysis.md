@@ -1,4 +1,4 @@
-# Lingma session_key 破解过程
+# Lingma session_key 解析过程
 
 > 日期：2026-04-27
 > 目标：找到 old Signature 链路所需的 `session_key`，使 `DeriveCredentialsRemotely` 在无本地 Lingma 的情况下也能成功登录。
@@ -11,7 +11,7 @@
 
 **验证**：对 3 个已知 oracle 中的 RFC1123 样本命中（1/3）；另外 2 个 Unix 时间戳 oracle 可能来自不同流程（COSY）或版本。代码已回填至 `internal/auth/remote_login.go`。
 
-**发现路径**：B1 静态反编译成功，通过 capstone 反汇编 `addBigModelSignatureHeaders` @ RVA 0x882760，追踪 LEA 指令加载的字符串地址，定位到 `.rdata` 中的 key 表。
+**发现路径**：B1 静态代码结构还原成功，通过 capstone 反汇编 `addBigModelSignatureHeaders` @ RVA 0x882760，追踪 LEA 指令加载的字符串地址，定位到 `.rdata` 中的 key 表。
 
 ---
 
@@ -21,8 +21,8 @@
 
 Lingma 的 HTTP 端点存在两套认证：
 
-1. **Bearer COSY**（已破解）：`Authorization: Bearer COSY <cosy_key>`，由本地 Lingma 进程与服务器协商生成。
-2. **old Signature**（已破解）：`Signature: <md5_hex>`，用于 `POST /algo/api/v3/user/login` 等早期端点。
+1. **Bearer COSY**（已解析）：`Authorization: Bearer COSY <cosy_key>`，由本地 Lingma 进程与服务器协商生成。
+2. **old Signature**（已解析）：`Signature: <md5_hex>`，用于 `POST /algo/api/v3/user/login` 等早期端点。
 
 `DeriveCredentialsRemotely` 走的是 old Signature 链路：在请求头中附加 `Date` + `Signature`，服务器验证通过后才返回 `cosy_key` 和 `encrypt_user_info`。
 
@@ -44,11 +44,11 @@ Unix: 1777016140                      ↔  Signature: 0f6648253e94ed37c37f33bd38
 
 ---
 
-## 2. 破解过程
+## 2. 解析过程
 
 ### 2.1 B3: Frida hook（失败 → 获得关键线索）
 
-**尝试**：Hook `Md5Encode` 函数入口（RVA 0x456320）以捕获明文输入。
+**尝试**：动态拦截 `Md5Encode` 函数入口（RVA 0x456320）以捕获明文输入。
 
 **结果**：
 - `Md5Encode` hook **从未触发** → 确认该函数在所有调用点被**内联（inlined）**
@@ -70,7 +70,7 @@ Unix: 1777016140                      ↔  Signature: 0f6648253e94ed37c37f33bd38
 - 所有已知静态候选（`&Q3C3!N5mP5bbNcyryMY@KZtUFLRGbTe`、base64 解码、hex 尾部等）+ 所有变体公式 → **0 命中**
 - 结论：key 不是简单的 ASCII 字符串拼接，公式必须包含非直观的部分（如额外的分隔符 `&`）
 
-### 2.3 B1: 静态反编译（成功！）
+### 2.3 B1: 静态代码结构还原（成功！）
 
 **工具**：Python capstone + pefile，反汇编 `addBigModelSignatureHeaders` @ RVA `0x882760`。
 

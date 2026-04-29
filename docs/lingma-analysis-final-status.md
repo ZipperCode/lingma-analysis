@@ -1,4 +1,4 @@
-# Lingma 逆向工程分析 - 最终状态总结
+# Lingma 协议研究工程分析 - 最终状态总结
 
 > 目录入口请先看 `docs/README.md`。
 
@@ -59,7 +59,7 @@ AES-128-CBC, key=IV=machineKey[:16]
 原始 JSON，自由构造 messages 数组。见 `lingma_remote_api.py:_build_chat_body()`。
 
 ### Encode=1 编解码
-已破解但 Chat API 不需要。保留供其他端点使用。
+已解析但 Chat API 不需要。保留供其他端点使用。
 
 ## 剩余约束
 
