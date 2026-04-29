@@ -214,6 +214,28 @@ func TestChatCompletionsRejectsToolCallWithoutFunctionName(t *testing.T) {
 	}
 }
 
+func TestChatCompletionsStripsEmptyNameToolCallsFromHistory(t *testing.T) {
+	// Mixed history: one valid tool_call + two empty-name fragments from a streaming bug.
+	// The proxy should silently strip the fragments and process the valid call.
+	handler := NewServer(Dependencies{
+		Credentials: fakeCredentials{},
+		Models:      fakeModels{},
+		Sessions:    fakeSessions{},
+		Transport:   fakeTransport{},
+		Builder:     fakeBuilder{},
+	}, nil)
+
+	body := `{"model":"auto","messages":[{"role":"user","content":"hi"},{"role":"assistant","content":"","tool_calls":[{"id":"c1","type":"function","function":{"name":"search","arguments":"{\"q\":\"x\"}"}},{"id":"","type":"function","function":{"name":"","arguments":""}}]}]}`
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200 after stripping empty-name tool_calls, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+}
+
 func TestChatCompletionsStreamWithToolCalls(t *testing.T) {
 	handler := NewServer(Dependencies{
 		Credentials: fakeCredentials{},
@@ -245,6 +267,10 @@ func TestChatCompletionsStreamWithToolCalls(t *testing.T) {
 	}
 	if !strings.Contains(responseBody, `"read_file"`) {
 		t.Fatalf("expected read_file function name, got: %s", responseBody)
+	}
+	// Continuation fragments with empty name should not produce a separate tool_call.
+	if strings.Contains(responseBody, `"name":""`) {
+		t.Fatalf("unexpected empty name tool_call leaked to client: %s", responseBody)
 	}
 }
 

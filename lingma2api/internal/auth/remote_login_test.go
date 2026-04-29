@@ -148,22 +148,25 @@ func TestFirstNonEmpty(t *testing.T) {
 
 func TestBuildSignatureStrategies(t *testing.T) {
 	strategies := buildSignatureStrategies("")
-	if len(strategies) != 1 {
-		t.Fatalf("expected 1 strategy without key, got %d", len(strategies))
+	if len(strategies) != 3 {
+		t.Fatalf("expected 3 strategies (no-sig + 2 default keys) without key, got %d", len(strategies))
 	}
 	if strategies[0].name != "no-signature" {
 		t.Errorf("expected no-signature, got %s", strategies[0].name)
 	}
+	if strategies[1].name != "cosy-sig" {
+		t.Errorf("expected cosy-sig, got %s", strategies[1].name)
+	}
 
 	strategies = buildSignatureStrategies("test-key-123")
-	if len(strategies) != 3 {
-		t.Fatalf("expected 3 strategies with key, got %d", len(strategies))
+	if len(strategies) != 2 {
+		t.Fatalf("expected 2 strategies (no-sig + 1 custom key) with key, got %d", len(strategies))
 	}
-	if strategies[1].name != "md5-rfc1123" {
-		t.Errorf("expected md5-rfc1123, got %s", strategies[1].name)
+	if strategies[0].name != "no-signature" {
+		t.Errorf("expected no-signature, got %s", strategies[0].name)
 	}
-	if strategies[2].name != "md5-unix" {
-		t.Errorf("expected md5-unix, got %s", strategies[2].name)
+	if strategies[1].name != "cosy-sig" {
+		t.Errorf("expected cosy-sig, got %s", strategies[1].name)
 	}
 }
 

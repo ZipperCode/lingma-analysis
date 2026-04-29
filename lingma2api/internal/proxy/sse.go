@@ -16,8 +16,9 @@ type outerSSEPayload struct {
 type innerSSEPayload struct {
 	Choices []struct {
 		Delta struct {
-			Content   string          `json:"content"`
-			ToolCalls []toolCallDelta `json:"tool_calls"`
+			Content          string          `json:"content"`
+			ReasoningContent string          `json:"reasoning_content"`
+			ToolCalls        []toolCallDelta `json:"tool_calls"`
 		} `json:"delta"`
 	} `json:"choices"`
 }
@@ -64,16 +65,19 @@ func ParseSSELine(line string) (SSEEvent, bool, error) {
 		return SSEEvent{}, false, err
 	}
 
-	var builder strings.Builder
+	var contentBuilder strings.Builder
+	var reasoningBuilder strings.Builder
 	for _, choice := range inner.Choices {
-		builder.WriteString(choice.Delta.Content)
+		contentBuilder.WriteString(choice.Delta.Content)
+		reasoningBuilder.WriteString(choice.Delta.ReasoningContent)
 	}
 	var toolCalls []ToolCall
 	for _, choice := range inner.Choices {
 		for _, tc := range choice.Delta.ToolCalls {
 			toolCalls = append(toolCalls, ToolCall{
-				ID:   tc.ID,
-				Type: tc.Type,
+				Index: tc.Index,
+				ID:    tc.ID,
+				Type:  tc.Type,
 				Function: FunctionCall{
 					Name:      tc.Function.Name,
 					Arguments: tc.Function.Arguments,
@@ -81,7 +85,11 @@ func ParseSSELine(line string) (SSEEvent, bool, error) {
 			})
 		}
 	}
-	return SSEEvent{Content: builder.String(), ToolCalls: toolCalls}, true, nil
+	return SSEEvent{
+		Content:          contentBuilder.String(),
+		ReasoningContent: reasoningBuilder.String(),
+		ToolCalls:        toolCalls,
+	}, true, nil
 }
 
 func ScanSSE(reader io.Reader, onEvent func(SSEEvent) error) error {

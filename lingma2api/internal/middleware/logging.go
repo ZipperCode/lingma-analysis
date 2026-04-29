@@ -94,6 +94,12 @@ func (r *responseRecorder) Write(b []byte) (int, error) {
 	return r.ResponseWriter.Write(b)
 }
 
+func (r *responseRecorder) Flush() {
+	if flusher, ok := r.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
 func extractTokensFromResponse(log *db.RequestLog) {
 	var resp struct {
 		Usage *struct {

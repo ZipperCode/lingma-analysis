@@ -1,4 +1,4 @@
-import type { LogListResult, RequestLog, DashboardData, AccountData, ModelMapping } from '../types';
+import type { LogListResult, RequestLog, DashboardData, AccountData, ModelMapping, BootstrapResponse } from '../types';
 
 function getToken(): string {
   return localStorage.getItem('admin_token') || '';
@@ -38,6 +38,8 @@ export const cleanupLogs = () => request<{ deleted: number }>('/admin/logs/clean
 // Account
 export const getAccount = () => request<AccountData>('/admin/account');
 export const refreshAccount = () => request<{ credential: unknown }>('/admin/account/refresh', { method: 'POST' });
+export const startBootstrap = () => request<BootstrapResponse>('/admin/account/bootstrap', { method: 'POST' });
+export const getBootstrapStatus = (id: string) => request<BootstrapResponse>(`/admin/account/bootstrap/status?id=${encodeURIComponent(id)}`);
 
 // Mappings
 export const getMappings = () => request<ModelMapping[]>('/admin/mappings');

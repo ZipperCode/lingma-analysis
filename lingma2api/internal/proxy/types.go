@@ -21,8 +21,9 @@ var (
 
 // ToolCall represents an OpenAI-compatible tool call from an assistant message.
 type ToolCall struct {
-	ID       string       `json:"id"`
-	Type     string       `json:"type"`
+	Index    int          `json:"index,omitempty"`
+	ID       string       `json:"id,omitempty"`
+	Type     string       `json:"type,omitempty"`
 	Function FunctionCall `json:"function"`
 }
 
@@ -65,6 +66,7 @@ type OpenAIChatRequest struct {
 	ExtraBody   ExtraBody `json:"extra_body,omitempty"`
 	Tools       []Tool    `json:"tools,omitempty"`
 	ToolChoice  any       `json:"tool_choice,omitempty"`
+	Reasoning   bool      `json:"-"` // enable Lingma native reasoning/thinking mode
 }
 
 type OpenAIModel struct {
@@ -148,9 +150,10 @@ type RemoteChatRequest struct {
 }
 
 type SSEEvent struct {
-	Content   string
-	ToolCalls []ToolCall
-	Done      bool
+	Content          string
+	ToolCalls        []ToolCall
+	ReasoningContent string
+	Done             bool
 }
 
 type UpstreamHTTPError struct {

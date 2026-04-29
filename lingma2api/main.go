@@ -74,6 +74,13 @@ func main() {
 		}
 	}()
 
+	bootstrapMgr := api.NewBootstrapManager(
+		cfg.Credential.AuthFile,
+		cfg.Lingma.ClientID,
+		cfg.Lingma.OAuthListenAddr,
+		cfg.Lingma.CosyVersion,
+	)
+
 	handler := api.NewServer(api.Dependencies{
 		Credentials: credentials,
 		Models:      models,
@@ -83,6 +90,7 @@ func main() {
 		AdminToken:  cfg.Server.AdminToken,
 		Now:         time.Now,
 		FrontendFS:  frontendDist,
+		Bootstrap:   bootstrapMgr,
 	}, store)
 
 	server := &http.Server{

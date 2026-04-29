@@ -30,6 +30,9 @@ func TestParseSSELineExtractsToolCallDelta(t *testing.T) {
 		t.Fatalf("expected 1 tool_call, got %d", len(event.ToolCalls))
 	}
 	tc := event.ToolCalls[0]
+	if tc.Index != 0 {
+		t.Fatalf("expected tool_call index 0, got %d", tc.Index)
+	}
 	if tc.ID != "c2" {
 		t.Fatalf("expected tool_call id c2, got %q", tc.ID)
 	}
@@ -55,10 +58,16 @@ func TestParseSSELineMergesToolCallFragmentArguments(t *testing.T) {
 	if len(event1.ToolCalls) != 1 {
 		t.Fatalf("line1: expected 1 tool_call, got %d", len(event1.ToolCalls))
 	}
+	if event1.ToolCalls[0].Index != 0 {
+		t.Fatalf("line1: expected tool_call index 0, got %d", event1.ToolCalls[0].Index)
+	}
 	// Arguments fragments should be present individually
 	arg1 := event1.ToolCalls[0].Function.Arguments
 	if len(arg1) == 0 {
 		t.Fatal("line1: expected non-empty arguments fragment")
+	}
+	if event2.ToolCalls[0].Index != 0 {
+		t.Fatalf("line2: expected tool_call index 0, got %d", event2.ToolCalls[0].Index)
 	}
 	arg2 := event2.ToolCalls[0].Function.Arguments
 	if len(arg2) == 0 {

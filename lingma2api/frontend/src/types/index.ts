@@ -87,4 +87,13 @@ export interface AccountData {
   };
 }
 
+export interface BootstrapResponse {
+  id: string;
+  status: string;
+  method: string;
+  auth_url?: string;
+  error?: string;
+  started_at: string;
+}
+
 export type Theme = 'light' | 'dark';

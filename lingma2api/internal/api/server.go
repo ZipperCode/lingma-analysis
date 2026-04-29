@@ -56,6 +56,7 @@ type Dependencies struct {
 	AdminToken  string
 	Now         func() time.Time
 	FrontendFS  embed.FS
+	Bootstrap   *BootstrapManager
 }
 
 type Server struct {
@@ -99,6 +100,7 @@ func NewServer(deps Dependencies, store *db.Store) http.Handler {
 	server := &Server{deps: deps, db: store}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/chat/completions", server.handleChatCompletions)
+	mux.HandleFunc("/v1/messages", server.handleAnthropicMessages)
 	mux.HandleFunc("/v1/models", server.handleModels)
 	mux.HandleFunc("/admin/status", server.handleAdminStatus)
 	mux.HandleFunc("/admin/refresh", server.handleAdminRefresh)
@@ -107,6 +109,8 @@ func NewServer(deps Dependencies, store *db.Store) http.Handler {
 	mux.HandleFunc("/admin/dashboard", server.handleAdminDashboard)
 	mux.HandleFunc("/admin/account", server.handleAdminAccount)
 	mux.HandleFunc("/admin/account/refresh", server.handleAdminAccountRefresh)
+	mux.HandleFunc("/admin/account/bootstrap", server.handleAdminAccountBootstrap)
+	mux.HandleFunc("/admin/account/bootstrap/status", server.handleAdminAccountBootstrapStatus)
 	mux.HandleFunc("/admin/settings", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
 			server.handleAdminSettingsGet(w, r)
@@ -216,7 +220,7 @@ func (server *Server) handleChatCompletions(writer http.ResponseWriter, request 
 		writeOpenAIError(writer, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := validateChatRequest(chatRequest); err != nil {
+	if err := validateChatRequest(&chatRequest); err != nil {
 		writeOpenAIError(writer, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -334,6 +338,44 @@ func (server *Server) streamChatResponse(
 	}
 	flusher.Flush()
 
+	// pendingTCs tracks in-progress tool calls by index, accumulating fragments
+	// from the upstream SSE stream into complete calls before emitting to the client.
+	type pendingToolCall struct {
+		id   string
+		typ  string
+		name string
+		args strings.Builder
+	}
+	pendingTCs := map[int]*pendingToolCall{}
+
+	// emitPending flushes a completed tool call as a single delta to the client.
+	emitPending := func(p *pendingToolCall) error {
+		tc := proxy.ToolCall{
+			Index: 0,
+			ID:    p.id,
+			Type:  p.typ,
+			Function: proxy.FunctionCall{
+				Name:      p.name,
+				Arguments: p.args.String(),
+			},
+		}
+		if tc.ID == "" {
+			tc.ID = "call_" + remoteRequest.RequestID + "_0"
+		}
+		choice := chatCompletionChoice{Index: 0}
+		choice.Delta = &deltaPayload{
+			Role:      "assistant",
+			ToolCalls: []proxy.ToolCall{tc},
+		}
+		return writeSSEChunk(writer, chatCompletionResponse{
+			ID:      responseID,
+			Object:  "chat.completion.chunk",
+			Created: server.deps.Now().Unix(),
+			Model:   chatRequest.Model,
+			Choices: []chatCompletionChoice{choice},
+		})
+	}
+
 	var contentBuilder strings.Builder
 	err := proxy.ScanSSE(stream, func(event proxy.SSEEvent) error {
 		if event.Done {
@@ -343,29 +385,66 @@ func (server *Server) streamChatResponse(
 			return nil
 		}
 		if event.Content != "" {
-			contentBuilder.WriteString(event.Content)
-		}
-		choice := chatCompletionChoice{Index: 0}
-		if len(event.ToolCalls) > 0 {
-			choice.Delta = &deltaPayload{
-				Role:      "assistant",
-				ToolCalls: event.ToolCalls,
+			// When content arrives, flush any pending tool calls first.
+			for _, p := range pendingTCs {
+				if err := emitPending(p); err != nil {
+					return err
+				}
+				flusher.Flush()
 			}
-		} else {
+			pendingTCs = map[int]*pendingToolCall{}
+
+			contentBuilder.WriteString(event.Content)
+			choice := chatCompletionChoice{Index: 0}
 			choice.Delta = &deltaPayload{Content: event.Content}
+			if err := writeSSEChunk(writer, chatCompletionResponse{
+				ID:      responseID,
+				Object:  "chat.completion.chunk",
+				Created: server.deps.Now().Unix(),
+				Model:   chatRequest.Model,
+				Choices: []chatCompletionChoice{choice},
+			}); err != nil {
+				return err
+			}
+			flusher.Flush()
+			return nil
 		}
-		if err := writeSSEChunk(writer, chatCompletionResponse{
-			ID:      responseID,
-			Object:  "chat.completion.chunk",
-			Created: server.deps.Now().Unix(),
-			Model:   chatRequest.Model,
-			Choices: []chatCompletionChoice{choice},
-		}); err != nil {
-			return err
+		// Handle tool call fragments.
+		for _, tc := range event.ToolCalls {
+			idx := tc.Index
+			p, exists := pendingTCs[idx]
+			isNew := tc.ID != "" || tc.Function.Name != ""
+			if !isNew && exists {
+				// Continuation fragment – just accumulate arguments.
+				p.args.WriteString(tc.Function.Arguments)
+			} else {
+				// New tool call start – flush any previous one at this index.
+				if exists {
+					if err := emitPending(p); err != nil {
+						return err
+					}
+					flusher.Flush()
+				}
+				p = &pendingToolCall{
+					id:   tc.ID,
+					typ:  tc.Type,
+					name: tc.Function.Name,
+				}
+				p.args.WriteString(tc.Function.Arguments)
+				pendingTCs[idx] = p
+			}
 		}
-		flusher.Flush()
 		return nil
 	})
+	// Flush any remaining pending tool calls after the stream ends.
+	if err == nil {
+		for _, p := range pendingTCs {
+			if err := emitPending(p); err != nil {
+				break
+			}
+			flusher.Flush()
+		}
+	}
 	if err != nil {
 		_, _ = fmt.Fprintf(writer, "data: {\"error\":{\"message\":%q}}\n\n", err.Error())
 		flusher.Flush()
@@ -491,24 +570,32 @@ func decodeChatRequest(writer http.ResponseWriter, request *http.Request) (proxy
 	return chatRequest, nil
 }
 
-func validateChatRequest(request proxy.OpenAIChatRequest) error {
+func validateChatRequest(request *proxy.OpenAIChatRequest) error {
 	if len(request.Messages) == 0 {
 		return errors.New("messages must not be empty")
 	}
-	for _, message := range request.Messages {
+	for i := range request.Messages {
+		message := &request.Messages[i]
 		switch message.Role {
 		case "system", "user":
 			if message.Content == "" {
 				return errors.New("message content must not be empty")
 			}
 		case "assistant":
+			// Filter empty-name tool_calls that may result from streaming
+			// fragment artifacts in upstream models. Stripping them preserves
+			// the conversation while the streaming fix prevents new ones.
+			if len(message.ToolCalls) > 0 {
+				filtered := message.ToolCalls[:0]
+				for _, tc := range message.ToolCalls {
+					if tc.Function.Name != "" {
+						filtered = append(filtered, tc)
+					}
+				}
+				message.ToolCalls = filtered
+			}
 			if message.Content == "" && len(message.ToolCalls) == 0 {
 				return errors.New("assistant message must have content or tool_calls")
-			}
-			for _, tc := range message.ToolCalls {
-				if tc.Function.Name == "" {
-					return errors.New("tool_call function name must not be empty")
-				}
 			}
 		case "tool":
 			if message.ToolCallID == "" {

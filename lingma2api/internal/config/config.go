@@ -30,9 +30,11 @@ type SessionConfig struct {
 }
 
 type LingmaConfig struct {
-	BaseURL     string
-	CosyVersion string
-	Transport   string
+	BaseURL         string
+	CosyVersion     string
+	Transport       string
+	ClientID        string
+	OAuthListenAddr string
 }
 
 func Default() Config {
@@ -49,9 +51,10 @@ func Default() Config {
 			MaxSessions: 100,
 		},
 		Lingma: LingmaConfig{
-			BaseURL:     "https://lingma.alibabacloud.com",
-			CosyVersion: "2.11.2",
-			Transport:   "curl",
+			BaseURL:         "https://lingma.alibabacloud.com",
+			CosyVersion:     "2.11.2",
+			Transport:       "curl",
+			OAuthListenAddr: "127.0.0.1:37510",
 		},
 	}
 }
@@ -196,6 +199,10 @@ func assignLingmaValue(cfg *LingmaConfig, key, value string) error {
 		cfg.CosyVersion = value
 	case "transport":
 		cfg.Transport = value
+	case "client_id":
+		cfg.ClientID = value
+	case "oauth_listen_addr":
+		cfg.OAuthListenAddr = value
 	default:
 		return fmt.Errorf("unknown lingma key %q", key)
 	}
