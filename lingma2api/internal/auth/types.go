@@ -16,4 +16,6 @@ type CallbackCapture struct {
 	Path       string
 	Query      url.Values
 	ReceivedAt time.Time
+	Referer    string
+	Body       []byte // non-nil for POST /submit-userinfo
 }

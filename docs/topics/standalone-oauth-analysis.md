@@ -1,7 +1,7 @@
 # 灵码独立 OAuth 认证分析报告
 
 > 日期：2026-04-29（更新）
-> 状态：**部分完成**（Encode=1 已逆向且对 v3 有效，但 auth payload 格式和 v3 签名机制待破解）
+> 状态：**v3 HTTP 端点走不通**（详见 3.4 节），推荐方案：获取 client_id 后使用标准 OAuth refresh
 > 目标：实现完全脱离本地灵码程序的独立 OAuth + Token 刷新机制
 
 ## 1. 核心发现
@@ -193,10 +193,56 @@ Encode=1 使用静态字母表（`_doRTgHZBKcGVjlvpC,...`），Encode=2 可能�
 
 轮询端点返回空 `{}`，说明需要先**启动轮询会话**。但启动端点尚未找到。
 
+**测试结果：**
+- `POST /algo/api/v3/user/oauth2/deviceToken` → 404（端点不存在）
+- `POST /algo/api/v3/user/oauth2/deviceToken/poll` → 400 "POST not supported"
+- `GET /algo/api/v3/user/oauth2/deviceToken/poll` → 200 `{}`（空响应，无活跃轮询）
+
 **可能的方式：**
 - 通过 WebSocket `login/generateUrl` 启动
 - 通过 devops.aliyun.com 间接启动
 - 通过其他未发现的 API 端点
+
+### 3.4 v3 HTTP 端点完整测试结果（2026-04-29）
+
+**结论：v3 HTTP 端点无法用于灵码内部 `pt-` 格式 token 的刷新**
+
+经过系统测试，发现 v3 `/algo/api/v3/user/refresh_token` 端点：
+
+1. **需要 `?Encode=1` 查询参数**（否则返回 400 "Required request parameter 'Encode' is not present"）
+2. **纯 Encode=1 编码足够**（不需要 AES 加密）
+3. **`securityOauthToken` + `refreshToken` 是唯一正确的字段组合**
+   - 缺少任一字段 → 500
+   - 添加额外字段 → 500（服务端不认识）
+   - 字段名变体（如 `securityToken`, `oauthToken`）→ 500
+4. **但始终返回 400 "auth payload is invalid"**
+
+**关键发现：**
+- `pt-` 格式的 token 是灵码内部格式，不是标准 OAuth token
+- v3 HTTP 端点需要**标准 OAuth token**（JWT 格式，`eyJ...`）
+- 标准 OAuth token 只能通过标准 OAuth 流程获取（需要 client_id）
+- 这意味着：**没有 client_id 就无法使用 v3 HTTP 端点**
+
+**测试矩阵：**
+
+| 测试项 | 结果 | 说明 |
+|--------|------|------|
+| `securityOauthToken` + `refreshToken` | 400 invalid | 字段正确，值验证失败 |
+| 去掉 `pt-` 前缀 | 500 | 服务端不认识该格式 |
+| 添加 `loginEnv: "cn"` | 400 invalid | `loginEnv` 被认识，但值仍失败 |
+| 添加 `loginEnv: "domestic"` | 500 | 无效值 |
+| 添加 `userId`, `machineId`, `expireTime` | 500 | 服务端不认识这些字段 |
+| AES+Encode=1 (`QbgzpWzN7tfe43gf`) | 500 | 不需要 AES |
+| `securityToken` / `oauthToken` 字段名 | 500 | 错误字段名 |
+| 空 body `{}` | 500 | 缺少必需字段 |
+
+**最终结论：**
+v3 HTTP 端点是灵码服务端用于标准 OAuth token 刷新的接口，但灵码内部使用自己的 `pt-`/`rt-` token 格式。两种 token 体系不互通。
+
+**可行的路径：**
+1. 通过浏览器 OAuth 流程获取标准 OAuth token（需要 client_id）
+2. 使用标准 OAuth token 调用 v3 端点
+3. 或者继续使用 WebSocket `auth/refreshToken`（不需要 client_id）
 
 ---
 

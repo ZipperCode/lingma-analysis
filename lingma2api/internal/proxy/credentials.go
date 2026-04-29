@@ -5,11 +5,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 
 	"lingma2api/internal/config"
 )
+
+// TokenRefreshFn is called when credentials need refreshing.
+type TokenRefreshFn func(ctx context.Context) error
 
 type CredentialManager struct {
 	mu      sync.RWMutex
@@ -17,6 +21,8 @@ type CredentialManager struct {
 	now     func() time.Time
 	current CredentialSnapshot
 	loaded  bool
+	// refreshFn is called when token is expired; if nil, no auto-refresh.
+	refreshFn TokenRefreshFn
 }
 
 func NewCredentialManager(cfg config.CredentialConfig, now func() time.Time) *CredentialManager {
@@ -32,16 +38,33 @@ func NewCredentialManager(cfg config.CredentialConfig, now func() time.Time) *Cr
 	}
 }
 
-func (manager *CredentialManager) Current(_ context.Context) (CredentialSnapshot, error) {
+// SetRefreshFn sets the callback used for auto-refreshing expired tokens.
+func (manager *CredentialManager) SetRefreshFn(fn TokenRefreshFn) {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	manager.refreshFn = fn
+}
+
+func (manager *CredentialManager) Current(ctx context.Context) (CredentialSnapshot, error) {
 	manager.mu.RLock()
-	if manager.loaded {
-		snapshot := manager.current
-		manager.mu.RUnlock()
-		return snapshot, nil
-	}
+	snapshot := manager.current
+	loaded := manager.loaded
+	refreshFn := manager.refreshFn
 	manager.mu.RUnlock()
 
-	return manager.Refresh(context.Background())
+	if loaded {
+		// Check if token is expired and auto-refresh if possible
+		if snapshot.IsTokenExpired(5*time.Minute) && refreshFn != nil {
+			if err := refreshFn(ctx); err == nil {
+				// Refresh successful, reload snapshot
+				return manager.Refresh(ctx)
+			}
+			// Refresh failed, return current (caller may retry or use anyway)
+		}
+		return snapshot, nil
+	}
+
+	return manager.Refresh(ctx)
 }
 
 func (manager *CredentialManager) Refresh(_ context.Context) (CredentialSnapshot, error) {
@@ -67,6 +90,7 @@ func (manager *CredentialManager) Status() CredentialStatus {
 		HasCredentials: manager.current.CosyKey != "" && manager.current.EncryptUserInfo != "",
 		Source:         manager.current.Source,
 		LoadedAt:       manager.current.LoadedAt,
+		TokenExpired:   manager.current.IsTokenExpired(5 * time.Minute),
 	}
 }
 
@@ -88,6 +112,8 @@ func (manager *CredentialManager) loadSnapshot() (CredentialSnapshot, error) {
 		stored.Source = "project_auth_file"
 	}
 
+	expireTime := parseExpireTime(stored.TokenExpireTime)
+
 	snapshot := CredentialSnapshot{
 		CosyKey:         stored.Auth.CosyKey,
 		EncryptUserInfo: stored.Auth.EncryptUserInfo,
@@ -95,8 +121,20 @@ func (manager *CredentialManager) loadSnapshot() (CredentialSnapshot, error) {
 		MachineID:       stored.Auth.MachineID,
 		Source:          stored.Source,
 		LoadedAt:        manager.now(),
+		TokenExpireTime: expireTime,
 	}
 	return snapshot, validateSnapshot(snapshot)
+}
+
+func parseExpireTime(s string) int64 {
+	if s == "" {
+		return 0
+	}
+	v, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return v
 }
 
 func validateSnapshot(snapshot CredentialSnapshot) error {

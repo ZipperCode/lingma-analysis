@@ -197,12 +197,8 @@ func (m *BootstrapManager) runWSFlow(id string, stored proxy.StoredCredentialFil
 		}
 	}
 
-	result, err := auth.RefreshTokensViaWebSocket(auth.WSRefreshConfig{
-		SecurityOauthToken: stored.OAuth.AccessToken,
-		RefreshToken:       stored.OAuth.RefreshToken,
-		TokenExpireTime:    expireTime,
-		Timeout:            30 * time.Second,
-	})
+	refresher := &auth.WSRefresher{}
+	result, err := refresher.Refresh(context.Background(), stored)
 	if err != nil {
 		m.updateSession(id, "error", fmt.Sprintf("WebSocket refresh: %v", err))
 		return

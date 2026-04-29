@@ -24,6 +24,43 @@ type cacheUserPayload struct {
 	ExpireTime         any    `json:"expire_time"`
 }
 
+// TryImportFromLingmaCache attempts to auto-detect and import credentials from
+// the standard ~/.lingma directory. Returns the imported credentials on success.
+func TryImportFromLingmaCache(outputPath string) (proxy.StoredCredentialFile, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return proxy.StoredCredentialFile{}, fmt.Errorf("find home dir: %w", err)
+	}
+
+	lingmaDir := filepath.Join(home, ".lingma")
+	if _, err := os.Stat(lingmaDir); os.IsNotExist(err) {
+		return proxy.StoredCredentialFile{}, fmt.Errorf("~/.lingma not found")
+	}
+
+	// Check if cache files exist
+	if _, err := os.Stat(filepath.Join(lingmaDir, "cache", "user")); os.IsNotExist(err) {
+		return proxy.StoredCredentialFile{}, fmt.Errorf("~/.lingma/cache/user not found")
+	}
+	if _, err := os.Stat(filepath.Join(lingmaDir, "cache", "id")); os.IsNotExist(err) {
+		// Try to find machine ID from logs
+		logPath := filepath.Join(lingmaDir, "logs", "lingma.log")
+		if _, err := os.Stat(logPath); os.IsNotExist(err) {
+			return proxy.StoredCredentialFile{}, fmt.Errorf("~/.lingma/cache/id not found and no logs available")
+		}
+	}
+
+	stored, err := ImportCredentialFileFromLingmaDir(lingmaDir, time.Now())
+	if err != nil {
+		return proxy.StoredCredentialFile{}, fmt.Errorf("import from lingma dir: %w", err)
+	}
+
+	if err := SaveCredentialFile(outputPath, stored); err != nil {
+		return proxy.StoredCredentialFile{}, fmt.Errorf("save imported credentials: %w", err)
+	}
+
+	return stored, nil
+}
+
 func ImportCredentialFileFromLingmaDir(lingmaDir string, now time.Time) (proxy.StoredCredentialFile, error) {
 	if lingmaDir == "" {
 		return proxy.StoredCredentialFile{}, errors.New("missing lingma dir")

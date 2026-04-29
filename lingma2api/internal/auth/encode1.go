@@ -114,6 +114,10 @@ func LingmaEncode(data []byte) string {
 	return lingmaEncode(data)
 }
 
+func LingmaDecode(body string) []byte {
+	return lingmaDecode(body)
+}
+
 func LingmaEncodeAES(plaintext, aesKey []byte) (string, error) {
 	return lingmaEncodeAES(plaintext, aesKey)
 }

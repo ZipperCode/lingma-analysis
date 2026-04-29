@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -108,14 +109,53 @@ func WaitForCallback(ctx context.Context, listenAddr, callbackPath string) (Call
 
 	mux := http.NewServeMux()
 	handler := func(writer http.ResponseWriter, request *http.Request) {
-		resultCh <- CaptureFromRequest(request)
+		captured := CaptureFromRequest(request)
+		captured.Referer = request.Header.Get("Referer")
+		resultCh <- captured
 		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = writer.Write([]byte("<h1>Authorization received</h1><p>You may close this window.</p>"))
+		writer.Header().Set("Access-Control-Allow-Origin", "*")
+		_, _ = writer.Write([]byte(`<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>Lingma Auth</title></head>
+<body>
+<h1>Authorization received</h1>
+<p>You may close this window.</p>
+<p>Run this in console to copy tokens:</p>
+<pre style="background:#f0f0f0;padding:8px;border-radius:4px;overflow:auto;max-height:200px">
+copy(window.user_info)
+</pre>
+</body></html>`))
 	}
 	mux.HandleFunc(callbackPath, handler)
 	if callbackPath != "/profile" {
 		mux.HandleFunc("/profile", handler)
 	}
+
+	// POST /submit-userinfo: bookmarklet submits window.user_info + window.login_url JSON
+	mux.HandleFunc("/submit-userinfo", func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodPost {
+			writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+			writer.WriteHeader(http.StatusMethodNotAllowed)
+			_, _ = writer.Write([]byte(`<h1>Method Not Allowed</h1><p>Use POST with JSON body: {"userInfo":..., "loginUrl":...}</p>`))
+			return
+		}
+		body, readErr := io.ReadAll(request.Body)
+		if readErr != nil {
+			errCh <- fmt.Errorf("read submit-userinfo body: %w", readErr)
+			return
+		}
+		defer request.Body.Close()
+
+		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+		writer.Header().Set("Access-Control-Allow-Origin", "*")
+		writer.WriteHeader(http.StatusOK)
+		_, _ = writer.Write([]byte(`<h1>Token data received</h1><p>You may close this window. Check the terminal for results.</p>`))
+
+		resultCh <- CallbackCapture{
+			Path:       "/submit-userinfo",
+			ReceivedAt: time.Now(),
+			Body:       body,
+		}
+	})
 
 	server := &http.Server{Handler: mux}
 	go func() {

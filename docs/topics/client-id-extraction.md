@@ -175,6 +175,13 @@ python tools/frida_extract_client_id.py \
 | Frida 内存扫描 | 技术可行但 98MB 二进制全扫超时；已知工具脚本 `frida_extract_client_id.py` 从未成功运行。 | 2026-04-27 |
 | 历史抓包 `capture/*.jsonl` | **否**。全部为 Chat API 流量，不含 OAuth 流。 | 2026-04-28 |
 | 自动化浏览器 (Playwright) | **否**。阿里云登录页面有反自动化检测，拒绝 automated browser。 | 2026-04-28 |
+| `~/.lingma/cache/user` 解密搜索 | **否**。解密后字段：`security_oauth_token`, `refresh_token`, `key`, `encrypt_user_info`，无 client_id。 | 2026-04-29 |
+| `~/.lingma/cache/client.json` | **否**。仅含 `debug` 和 `extensionConfigPullInterval`。 | 2026-04-29 |
+| `~/.lingma/cache/machine_token.json` | **否**。含空 token 和 type 字段。 | 2026-04-29 |
+| `~/.lingma/logs/lingma.log` 全量搜索 | **否**。日志含大量 token 刷新记录，但无 client_id 或 OAuth URL。 | 2026-04-29 |
+| `~/.lingma/bin/*/config.json` 所有版本 | **否**。仅含版本号。 | 2026-04-29 |
+| SQLite `supabase_token` 表 | **否**。表为空。 | 2026-04-29 |
+| `auth/pollToken` WebSocket 方法 | **否**。返回 "unknown method"。 | 2026-04-29 |
 
 ## 5. `client_id/register` 二进制分析
 

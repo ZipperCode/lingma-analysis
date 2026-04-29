@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"lingma2api/internal/api"
+	"lingma2api/internal/auth"
 	"lingma2api/internal/config"
 	"lingma2api/internal/db"
 	"lingma2api/internal/proxy"
@@ -36,6 +37,28 @@ func main() {
 		CosyVersion: cfg.Lingma.CosyVersion,
 	})
 	credentials := proxy.NewCredentialManager(cfg.Credential, time.Now)
+
+	// Auto-import from ~/.lingma cache if auth file missing
+	if _, err := os.Stat(cfg.Credential.AuthFile); os.IsNotExist(err) {
+		if imported, err := auth.TryImportFromLingmaCache(cfg.Credential.AuthFile); err == nil {
+			log.Printf("auto-imported credentials from ~/.lingma cache (source: %s)", imported.Source)
+		}
+	}
+
+	// Setup auto-refresh: OAuth (if client_id available) -> WebSocket fallback
+	var refresher auth.TokenRefresher
+	if cfg.Lingma.ClientID != "" {
+		refresher = auth.NewMultiRefresher(
+			&auth.OAuthRefresher{ClientID: cfg.Lingma.ClientID},
+			&auth.WSRefresher{},
+		)
+	} else {
+		refresher = &auth.WSRefresher{}
+	}
+	credentials.SetRefreshFn(func(ctx context.Context) error {
+		return auth.RefreshAndSave(ctx, cfg.Credential.AuthFile, refresher, true, "")
+	})
+
 	transport := proxy.NewCurlTransport(cfg.Lingma.BaseURL, signer, 90*time.Second)
 	models := proxy.NewModelService(transport, credentials, proxy.DefaultAliases(), time.Now)
 	sessions := proxy.NewSessionStore(time.Duration(cfg.Session.TTLMinutes)*time.Minute, cfg.Session.MaxSessions, time.Now)

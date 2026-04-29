@@ -87,6 +87,17 @@ type CredentialSnapshot struct {
 	MachineID       string    `json:"machine_id"`
 	Source          string    `json:"source"`
 	LoadedAt        time.Time `json:"loaded_at"`
+	// TokenExpireTime is the OAuth token expiration in unix millis (0 = unknown).
+	TokenExpireTime int64 `json:"token_expire_time"`
+}
+
+// IsTokenExpired checks if the OAuth token is expired or about to expire.
+// graceMargin is the time before actual expiration to consider as expired.
+func (s CredentialSnapshot) IsTokenExpired(graceMargin time.Duration) bool {
+	if s.TokenExpireTime == 0 {
+		return false // unknown expiration, assume valid
+	}
+	return time.Now().Add(graceMargin).UnixMilli() > s.TokenExpireTime
 }
 
 type StoredCredentialFile struct {
@@ -117,6 +128,7 @@ type CredentialStatus struct {
 	HasCredentials bool      `json:"has_credentials"`
 	Source         string    `json:"source"`
 	LoadedAt       time.Time `json:"loaded_at"`
+	TokenExpired   bool      `json:"token_expired"`
 }
 
 type SessionState struct {
