@@ -201,7 +201,7 @@
 - `C:\Users\Zipper\.lingma\logs\lingma.log`
 - `C:\Users\Zipper\.lingma\cache\db\local.db`
 
-当前看到的结果和前面的 macOS / 调试 workDir 样本并不完全相同：
+当前看到的结果和前面的 macOS / 观测 workDir 样本并不完全相同：
 
 - 主目录 `C:\Users\Zipper\.lingma\cache` 下当前只有：
   - `db/`
@@ -231,7 +231,7 @@
 - 这台 Windows 当前样本处在“用户态已清空或当前未缓存活跃 user info”的状态
 - 因而不能把“这台机器当前没有 `cache/user` 文件”直接外推成所有平台、所有时刻都没有这类文件
 - 更稳的说法应改成：
-  - `cache/user/id/quota` 那套持久化链已经在其他调试样本里被坐实
+  - `cache/user/id/quota` 那套持久化链已经在其他观测样本里被坐实
   - 但当前这份 Windows 安装态样本只直接保留了 `local.db`、`policy`、`diagnosis` 和一份旧的 `sharedClientCache/cache/id`
 
 对数据库本身再做只读检查后，当前样本还能补两条边界：
@@ -254,7 +254,7 @@
 
 ### 已直接坐实的映射
 
-- 调试副本 `machine-info` 已直接返回：
+- 分析副本 `machine-info` 已直接返回：
   - `machineToken`
   - `machineType`
 - 其中：

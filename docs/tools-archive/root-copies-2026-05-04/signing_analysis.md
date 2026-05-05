@@ -92,7 +92,7 @@ getAppSalt 和签名流程只在以下条件满足时执行：
 - 向 `https://lingma.alibabacloud.com/algo/*` 或 `https://lingma-api.tongyi.aliyun.com/algo/*` 发送请求
 - 需要在 headers 中包含正确的签名
 
-### 方法 3: 静态逆向
+### 方法 3: 静态分析
 - 完全从 disassembly 还原签名算法
 - 需要理解 runtime map 操作、字符串格式化、和最终的加密调用
 
@@ -105,7 +105,7 @@ getAppSalt 和签名流程只在以下条件满足时执行：
 
 ## 下一步建议
 
-1. **静态逆向 0x882e40**: 这个函数提取实际的签名数据，理解它就能看到签名输入
+1. **静态分析 0x882e40**: 这个函数提取实际的签名数据，理解它就能看到签名输入
 2. **分析 HTTP 请求结构**: 观察签名如何被用于 headers
 3. **尝试登录流程**: 通过 LSP pipe 触发完整的认证流程
 4. **Hook 更底层**: 考虑 hook crypto/hash 相关函数（crypto/hmac, crypto/sha256 等）

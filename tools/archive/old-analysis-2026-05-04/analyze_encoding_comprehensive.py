@@ -5,7 +5,7 @@ Goals:
 1. Confirm it's a base64-like encoding with custom alphabet
 2. Determine if there's encryption layer (AES, XOR, etc.)
 3. Find patterns between different encoded bodies
-4. Try to reverse the encoding from binary analysis data
+4. Try to reconstruct the encoding from binary analysis data
 """
 
 import base64

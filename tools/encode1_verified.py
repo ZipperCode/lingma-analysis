@@ -7,7 +7,7 @@
 Encode=1 是纯自定义 base64 编码，不使用 AES 加密。
 用于 v1 API 端点（heartbeat、tracking 等）。
 
-v3 API 端点（refresh_token、login 等）使用 Encode=2，尚未逆向。
+v3 API 端点（refresh_token、login 等）使用 Encode=2，尚未完成分析。
 """
 
 import base64

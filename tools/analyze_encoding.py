@@ -1,4 +1,4 @@
-"""Analyze the custom 65-char body encoding to reverse-engineer the algorithm."""
+"""Analyze the custom 65-char body encoding to reconstruct the algorithm."""
 
 import base64
 import json

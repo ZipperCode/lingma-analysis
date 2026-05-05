@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","id":48,"method":"tools/call","params":{"name":"py_eval","arguments":{"code":"import ida_funcs,idc\nfor ea in range(0x14088d000,0x14088e260):\n    f=ida_funcs.get_func(ea)\n    if f and f.start_ea==ea:\n        nm=idc.get_func_name(ea)\n        if nm:\n            print(hex(ea)+': '+nm[-100:])"}}}

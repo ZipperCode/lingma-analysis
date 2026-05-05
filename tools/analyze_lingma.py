@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Lingma.exe 签名函数逆向分析工具
+Lingma.exe 签名函数分析工具
 目标: Go 1.23 PE 64位, ImageBase = 0x140000000
 """
 

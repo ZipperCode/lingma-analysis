@@ -1,6 +1,6 @@
 """Reproduce the Lingma signing algorithm and forge HTTP requests.
 
-Based on reverse engineering of getAppSalt (0x882760) and SHA-256 (0x4563c0):
+Based on prior analysis of getAppSalt (0x882760) and SHA-256 (0x4563c0):
 
 Signing algorithm:
 1. Get the secret signing key (hardcoded in getAppSalt)

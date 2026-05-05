@@ -1107,19 +1107,19 @@
 - “脱离 plugin UI” 已成立
 - “脱离 Lingma 进程本体” 还没有成立
 
-## 调试边界
+## 附加边界
 
 ### 原始程序不可附加
 
 - 原始 `~/.lingma/bin/2.11.1/aarch64_darwin/Lingma` 即使由当前账号自行启动，`frida` 与 `lldb` 仍会被系统拒绝附加。
 - 当前更合理的解释是：
   - 问题不在“是不是同一用户启动”
-  - 而在原始签名与 hardened runtime 调试策略
+  - 而在原始签名与 hardened runtime 附加限制策略
 
-### 调试副本可附加
+### 分析副本可附加
 
-- 复制二进制并做 ad-hoc 重签名后，调试副本可以被 `frida` 和 `lldb` 成功附加。
-- 当前实际使用的调试副本是：
+- 复制二进制并做 ad-hoc 重签名后，分析副本可以被 `frida` 和 `lldb` 成功附加。
+- 当前实际使用的分析副本是：
   - [/tmp/lingma-debug/Lingma](/tmp/lingma-debug/Lingma)
 - 这份副本已用于：
   - 运行时枚举 `SecurityGuardSDKManager`
@@ -1139,7 +1139,7 @@
 - 当前所有已抓到的远端请求里：
   - `Cosy-MachineToken = ""`
   - `Cosy-MachineType = ""`
-- 但调试副本 `machine-info` 明确能返回：
+- 但分析副本 `machine-info` 明确能返回：
   - `machineToken`
   - `machineType`
 - 这说明：

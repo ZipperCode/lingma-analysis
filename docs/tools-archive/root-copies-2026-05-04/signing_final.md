@@ -1,7 +1,7 @@
 # Lingma CTF - 最终分析报告
 
 > 历史说明（2026-04-25）：
-> 这份报告保留的是签名链逆向阶段结论，不再代表当前仓库的最终总状态。
+> 这份报告保留的是签名链分析阶段结论，不再代表当前仓库的最终总状态。
 > 当前已经存在受约束的远端直连实现，因此请把它视为签名专项证据，而不是总览结论。
 
 > 状态说明：这是一份 signer 分支的阶段性总结，里面关于 `SHA-256/getAppSalt` 主导全链的问题定义，已经被后续主文档进一步收缩。当前继续推进时，应优先以 `docs/lingma-analysis-endpoint-auth.md`、`docs/lingma-analysis-request-flow-pruned.md` 和 `docs/continue-analysis-from-current-state.md` 为准，这份文件只保留局部历史价值。

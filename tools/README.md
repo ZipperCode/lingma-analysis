@@ -1,16 +1,22 @@
 # tools 目录整理说明
 
-更新时间：2026-04-27
+更新时间：2026-05-04
 
 ## 目的
 
-`tools/` 当前混合了三类内容：
+`tools/` 曾经混合三类内容：
 
 - 当前仍有参考价值的探针和辅助脚本
 - 历史阶段的分析报告
 - 大量一次性实验脚本和 `vN` 变体
 
 这份说明的目标是把“当前该看什么”和“哪些只是历史痕迹”分开，避免继续被旧脚本命名污染判断。
+
+2026-05-04 已执行一次整理：
+
+- 历史 Markdown 工作副本移到 `../docs/tools-archive/root-copies-2026-05-04/`
+- 旧的 Frida/getAppSalt/patch/pipe 迭代脚本移到 `archive/old-analysis-2026-05-04/`
+- `tools/` 根目录优先保留当前仍可复用的探针、验证脚本和新一轮 OAuth/refresh 相关工具
 
 ## 当前主线文件
 
@@ -39,7 +45,7 @@
 
 ## 历史报告
 
-以下 Markdown 仍有证据价值，但不再代表当前总状态。整理后的归档副本统一放在 `../docs/tools-archive/`，根目录这些同名文件只保留为历史工作副本：
+以下 Markdown 仍有证据价值，但不再代表当前总状态。整理后的归档副本统一放在 `../docs/tools-archive/`，原 `tools/` 根目录工作副本已移到 `../docs/tools-archive/root-copies-2026-05-04/`：
 
 - `auth_final_report.md`
 - `signing_final.md`
@@ -55,7 +61,7 @@
 
 ## 历史实验脚本
 
-以下命名模式默认视为一次性实验，不应作为当前入口：
+以下命名模式默认视为一次性实验，不应作为当前入口。旧 getAppSalt、Frida pipe、patch 和地址定位迭代产物已集中到 `archive/old-analysis-2026-05-04/`：
 
 - `*_v2.py`, `*_v3.py`, `*_v4.py`
 - `test_*.py`

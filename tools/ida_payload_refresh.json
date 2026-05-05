@@ -1,0 +1,11 @@
+{
+    "jsonrpc": "2.0",
+    "id": 8,
+    "method": "tools/call",
+    "params": {
+        "name": "py_exec_file",
+        "arguments": {
+            "file_path": "D:\\Project\\lingma\\tools\\ida_trace_refresh.py"
+        }
+    }
+}

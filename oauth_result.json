@@ -1,0 +1,31 @@
+{
+  "method": "GET",
+  "path": "/auth/callback?state=58238352de4c4ae49f1549605356d947&aid=5930676910898027&uid=5930676910898027&name=zhang640%40blny.de",
+  "query_params": {
+    "state": "58238352de4c4ae49f1549605356d947",
+    "aid": "5930676910898027",
+    "uid": "5930676910898027",
+    "name": "zhang640@blny.de"
+  },
+  "headers": {
+    "Host": "127.0.0.1:35710",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+    "Sec-Fetch-Site": "cross-site",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Dest": "document",
+    "sec-ch-ua": "\"Google Chrome\";v=\"147\", \"Not.A/Brand\";v=\"8\", \"Chromium\";v=\"147\"",
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": "\"Windows\"",
+    "Accept-Encoding": "gzip, deflate, br, zstd",
+    "Accept-Language": "zh-CN,zh;q=0.9",
+    "Cookie": "ajs_anonymous_id=15258e95-3364-487a-9cfb-01d9e106a94e"
+  },
+  "client_address": [
+    "127.0.0.1",
+    59706
+  ],
+  "timestamp": 1777901233.6212146
+}

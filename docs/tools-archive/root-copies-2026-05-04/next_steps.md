@@ -33,7 +33,7 @@
 2. 登录后 getAppSalt 会被调用
 3. 用 runtime patching 捕获返回值
 
-### 方案 2: 逆向签名算法
+### 方案 2: 签名分析
 1. 分析 addBigModelSignatureHeaders (0x882680) 的完整流程
 2. 理解 getAppSalt 的 map 如何被用于签名计算
 3. 用 Python 复现签名算法
@@ -50,7 +50,7 @@
 
 ## 推荐优先级
 
-**方案 3 (Hook HTTP 层)** > **方案 1 (登录)** > **方案 2 (逆向算法)** > **方案 4 (验证 patching)**
+**方案 3 (Hook HTTP 层)** > **方案 1 (登录)** > **方案 2 (签名分析)** > **方案 4 (验证 patching)**
 
 理由:
 - 方案 3 最直接 — 如果签名是在 HTTP 请求中加的，hook HTTP 发送就能看到

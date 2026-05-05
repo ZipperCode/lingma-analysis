@@ -113,7 +113,7 @@
   - `/debug/pprof/` 和 `/debug/vars` 在这两个端口上都不是公开入口，统一 404
 - 这意味着：
   - 内置 profiling/trace 确实存在
-  - 但默认不会通过普通 HTTP 暴露调试页
+  - 但默认不会通过普通 HTTP 暴露观测页
   - 如果要继续动态抓更细内容，最有价值的入口已经从“HTTP 探测”收敛到“38510 的 websocket profile channel”
 
 ### 快照 10
@@ -2073,7 +2073,7 @@
      - 当前活跃 `pt-/rt-` 用户态票据
      - 机器/系统信息
      - 时间戳
-- 结合二进制里的调试模板：
+- 结合二进制里的观测模板：
   - `=== Signature Components (used for MD5) ===`
   - `1. Payload (base64)`
   - `2. Key (Cosy-Key)`
@@ -2306,7 +2306,7 @@
   - `expected_signature`
   - `body_is_valid_utf8`
   - `signature_validation_failed`
-- 结合已有调试模板：
+- 结合已有观测模板：
   - `=== Signature Components (used for MD5) ===`
   - `Payload (base64)`
   - `Key (Cosy-Key)`
@@ -2506,13 +2506,13 @@
   - 这样后续维护会更稳定。
   - 也更符合当前已掌握事实：真正稳定可复用的是本地服务能力，不是远端签名链本身。
 
-## 2026-04-24 第二十三轮调试附加与运行时 SecurityGuard 探测
+## 2026-04-24 第二十三轮附加排查与运行时 SecurityGuard 探测
 
 - 本轮先把“为什么一直附加失败”单独收敛掉了。
   - 原始 `~/.lingma/bin/2.11.1/aarch64_darwin/Lingma` 即使由当前账号自行启动，`frida` 与 `lldb` 仍会被系统拒绝附加。
-  - 问题不在“是不是同一用户启动”，而在原始签名 / hardened runtime 调试策略。
-  - 复制二进制后做 ad-hoc 重签名，并补 `get-task-allow` 等 entitlements 的调试副本，可以成功被 `frida` 和 `lldb` 附加。
-  - 当前有效调试副本路径是：
+  - 问题不在“是不是同一用户启动”，而在原始签名 / hardened runtime 附加限制策略。
+  - 复制二进制后做 ad-hoc 重签名，并补 `get-task-allow` 等 entitlements 的分析副本，可以成功被 `frida` 和 `lldb` 附加。
+  - 当前有效分析副本路径是：
     - `/tmp/lingma-debug/Lingma`
 
 - 这轮把 `SecurityGuardSDKManager` 的运行时对象图真正跑活了，不再只停留在静态字符串层。
@@ -2641,7 +2641,7 @@
   - 但当前仍不能据此证明它和后续 `Bearer COSY...` 末尾 32 位 hex 是同一条算法链
 
 - 本轮又做了一个更有判别力的实验：
-  - 起一份新的 endpoint 调试副本
+  - 起一份新的 endpoint 分析副本
   - 尝试用 `frida` override：
     - `UMIDInterface.getSecurityToken:`
     - `SecurityFactors.getMiniWua::`
@@ -2659,7 +2659,7 @@
 
 - 随后又补了一条更强的重启实验：
   - 使用同一个 `workDir`：
-    - 先起一份 endpoint 调试副本抓到 `Cosy-Key/info`
+    - 先起一份 endpoint 分析副本抓到 `Cosy-Key/info`
     - 再杀掉进程
     - 用同一个 `workDir` 起新 PID / 新端口的实例
     - 再触发 `device_login + chat/ask`
@@ -2917,7 +2917,7 @@
 - 同时这里也没有：
   - `user`
   - `quota`
-- 这和前面 macOS / 调试 workDir 样本中已经坐实的 `cache/user/id/quota` 结构并不完全一致。
+- 这和前面 macOS / 观测 workDir 样本中已经坐实的 `cache/user/id/quota` 结构并不完全一致。
 
 ### 快照 90
 
@@ -2930,7 +2930,7 @@
   - 这份 Windows 样本处在“用户态已清空或当前未缓存活跃 user info”的状态
   - 所以不能把“当前没看到 `cache/user`”直接外推成所有平台都没有这类文件
   - 更稳的说法应当是：
-    - `cache/user/id/quota` 这套链已经在其他调试样本里被坐实
+    - `cache/user/id/quota` 这套链已经在其他观测样本里被坐实
     - 但这份 Windows 当前样本只留下了 DB、policy、diagnosis 和一份旧的 `sharedClientCache/cache/id`
 
 ### 快照 91

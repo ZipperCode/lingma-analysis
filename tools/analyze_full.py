@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Lingma.exe 签名函数深度逆向分析
+Lingma.exe 签名函数深度分析
 完整的 x86-64 反汇编 + Go 运行时分析 + 字符串追踪
 
 用法: python analyze_full.py
