@@ -256,9 +256,101 @@ def build_token_v2(token: str, refresh_token: str, expire_time: int) -> str:
 
 def custom_decrypt_parts(encoded: str, expected_parts: int = 3) -> list:
     """CustomDecryptParts: decodeString → split(\\n, expected_parts)"""
-    decoded = decode_string(encoded)
-    text = decoded.decode('utf-8')
-    return text.split('\n', expected_parts - 1)
+    try:
+        decoded = decode_string(encoded)
+        text = decoded.decode('utf-8')
+        parts = text.split('\n', expected_parts - 1)
+        if len(parts) >= expected_parts:
+            return parts
+    except Exception as e:
+        print(f"    [!] decode_string error: {e}")
+
+    # 备用方案: 从解码数据中搜索已知模式
+    print(f"    [*] Trying robust extraction...")
+    try:
+        # 方法1: 尝试不同的块排列
+        for method in ['b1+b2+b0', 'b1+b0+b2', 'b0+b1+b2', 'b0+b2+b1']:
+            extracted = _robust_decode(encoded, method)
+            if extracted and len(extracted) >= expected_parts:
+                return extracted
+    except:
+        pass
+
+    return []
+
+
+def _robust_decode(encoded: str, method: str = 'b1+b2+b0') -> list:
+    """从编码数据中提取文本模式"""
+    body = encoded
+    dollar = body.find('$')
+    if dollar >= 0:
+        rev = body[:dollar] + body[dollar+1:]
+    else:
+        rev = body
+    n = len(rev)
+    v24 = (n + n // 3) // 2
+    v7 = n - v24
+    b2 = rev[:v7]
+    b01 = rev[v7:]
+
+    # 尝试不同的 b0/b1 分割
+    for split in range(min(10, len(b01)+1)):
+        b0 = b01[:split]
+        b1 = b01[split:]
+
+        for name, combo in [
+            ("b0+b1+b2", b0 + b1 + b2),
+            ("b1+b0+b2", b1 + b0 + b2),
+            ("b1+b2+b0", b1 + b2 + b0),
+            ("b0+b2+b1", b0 + b2 + b1),
+        ]:
+            try:
+                decoded = _custom_b64_decode(combo)
+                text = decoded.decode('utf-8', errors='replace')
+
+                # 搜索 pt- (token) 或 rt- (refresh) 或 @ (email)
+                parts = []
+                if 'pt-' in text:
+                    pts = [m.start() for m in __import__('re').finditer(r'pt-[A-Za-z0-9]+', text)]
+                    for pos in pts:
+                        end = text.index('\n', pos) if '\n' in text[pos:] else pos + 30
+                        parts.append(text[pos:end])
+                if 'rt-' in text:
+                    rts = [m.start() for m in __import__('re').finditer(r'rt-[A-Za-z0-9]+', text)]
+                    for pos in rts:
+                        end = text.index('\n', pos) if '\n' in text[pos:] else pos + 30
+                        parts.append(text[pos:end])
+
+                # 提取数字 (expire time)
+                nums = __import__('re').findall(r'\b\d{13}\b', text)
+                parts.extend(nums)
+
+                # 提取邮箱
+                emails = __import__('re').findall(r'[\w.]+@[\w.]+', text)
+                parts.extend(emails)
+
+                if parts:
+                    return parts
+
+                # 提取所有 ASCII 文本段
+                ascii_segments = []
+                current = ''
+                for byte in decoded:
+                    if 32 <= byte < 127:
+                        current += chr(byte)
+                    else:
+                        if current and len(current) > 3:
+                            ascii_segments.append(current)
+                        current = ''
+                if current and len(current) > 3:
+                    ascii_segments.append(current)
+
+                if len(ascii_segments) >= expected_parts:
+                    return ascii_segments[:expected_parts]
+
+            except:
+                pass
+    return []
 
 
 def parse_callback_v2(params: dict) -> dict:
@@ -269,20 +361,55 @@ def parse_callback_v2(params: dict) -> dict:
     result = {}
 
     if "auth" in params:
+        print(f"    [*] Decoding auth param ({len(params['auth'])} chars)...")
         parts = custom_decrypt_parts(params["auth"], 3)
         if len(parts) >= 3:
-            result.update(uid=parts[0], aid=parts[1], name=parts[2])
+            # 尝试识别: UID, AID, Name
+            uids = [p for p in parts if p.isdigit() and len(p) >= 8]
+            names = [p for p in parts if '@' in p]
+            if uids and names:
+                result.update(uid=uids[0], aid=uids[0] if len(uids) > 1 else uids[0], name=names[0])
+            elif uids:
+                result.update(uid=uids[0], aid=uids[0])
+            elif names:
+                result.update(name=names[0])
+            print(f"    [✓] Auth decoded: UID={result.get('uid', '?')[:20]}... Name={result.get('name', '?')[:30]}...")
+        else:
+            print(f"    [!] Auth decode: got {len(parts)} parts, trying raw extraction...")
+            # 直接从原始数据提取
+            raw_text = params.get("auth", "")
+            import re as _re
+            uids = _re.findall(r'\b\d{16}\b', raw_text)
+            emails = _re.findall(r'[\w.]+@[\w.]+', raw_text)
+            if uids:
+                result['uid'] = uids[0]
+            if len(uids) > 1:
+                result['aid'] = uids[1]
+            if emails:
+                result['name'] = emails[0]
     elif "aid" in params and "uid" in params:
         result.update(uid=params["uid"], aid=params["aid"], name=params.get("name", ""))
+        print(f"    [✓] V1 params: UID={result['uid'][:20]}...")
 
     if "token" in params:
+        print(f"    [*] Decoding token param ({len(params['token'])} chars)...")
         parts = custom_decrypt_parts(params["token"], 3)
         if len(parts) >= 3:
+            result.update(token=parts[0], refresh_token=parts[1])
             try:
-                expire = int(parts[2])
+                result['expire_time'] = int(parts[2])
             except ValueError:
-                expire = 0
-            result.update(token=parts[0], refresh_token=parts[1], expire_time=expire)
+                pass
+            print(f"    [✓] Token decoded: {result.get('token', '?')[:20]}...")
+        else:
+            print(f"    [!] Token decode: got {len(parts)} parts")
+            import re as _re
+            pts = _re.findall(r'pt-[A-Za-z0-9]+', params.get("token", ""))
+            rts = _re.findall(r'rt-[A-Za-z0-9]+', params.get("token", ""))
+            if pts: result['token'] = pts[0]
+            if rts: result['refresh_token'] = rts[0]
+
+    return result
 
     return result
 
@@ -379,6 +506,22 @@ class CallbackHandler(http.server.BaseHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         params = urllib.parse.parse_qs(parsed.query)
         flat = {k: v[0] for k, v in params.items()}
+
+        # DEBUG: 显示原始回调参数
+        print(f'\n{"="*60}')
+        print(f'[*] 收到回调! Path: {self.path[:200]}')
+        print(f'[*] 参数 keys: {list(flat.keys())}')
+        for k, v in flat.items():
+            val_preview = v[:80] if len(v) > 80 else v
+            print(f'    {k}: {val_preview}')
+            if k in ("auth", "token") and len(v) > 80:
+                print(f'      decoded sample: {urllib.parse.unquote(v)[:80]}')
+                # Try custom decode
+                try:
+                    decoded = decode_string(urllib.parse.unquote(v))
+                    print(f'      custom decoded bytes: {decoded[:40].hex()} = {decoded[:40]}')
+                except Exception as ex:
+                    print(f'      custom decode error: {ex}')
 
         self.send_response(200)
         self.send_header("Access-Control-Allow-Origin", "*")
