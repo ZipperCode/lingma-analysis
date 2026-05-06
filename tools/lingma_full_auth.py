@@ -178,14 +178,17 @@ def build_basic_headers(machine_id: str, client_type: str = "2", cosy_version: s
 
 def api_call(method: str, path: str, body_json: dict,
              machine_id: str, encode_version: str = "",
-             magic: str = "none") -> tuple:
+             magic: str = "none", endpoint: str = None) -> tuple:
     """
     通用 API 调用，完整模拟 buildRequest 流程
 
     参数:
       encode_version: ""=原始JSON, "1"=Encode=1编码
       magic: 认证模式 — "none"(签名), "http"(Bearer), "sign"(仅基础头)
+      endpoint: API 基础 URL (默认使用 BIG_MODEL_ENDPOINT)
     """
+    if endpoint is None:
+        endpoint = BIG_MODEL_ENDPOINT
     body_str = json.dumps(body_json, ensure_ascii=False, separators=(",", ":"))
 
     # Step 1: encodeRequestBody — JSON marshal to bytes
@@ -199,7 +202,7 @@ def api_call(method: str, path: str, body_json: dict,
         final_body = body_bytes
 
     # Step 3: 构建 URL 和头
-    url = f"{BIG_MODEL_ENDPOINT}{path}"
+    url = f"{endpoint}{path}"
     date_str = get_rfc1123_date()
 
     # Step 4: 根据 magic 选择认证头
@@ -679,22 +682,43 @@ def main():
 
     # ── Phase 4: 调用 /api/v3/user/status (Encode=1 编码!) ──
     print(f"\n{'='*60}")
-    print(f"Phase 4: 调用 /api/v3/user/status [EncodeVersion=1]")
+    print(f"Phase 4: 调用 /api/v3/user/status [EncodeVersion=1, magic=sign]")
     print(f"{'='*60}")
 
+    # AuthQueryParam 完整结构 (IDA @ cosy_remoting_AuthQueryParam)
     status_body = {
-        "uid": uid,
-        # AuthQueryParam 可能还需要其他字段
+        "ak": "", "sk": "", "securityToken": "",
+        "userId": uid, "orgId": "",
+        "token": "", "personalToken": "",
+        "securityOauthToken": oauth_token,
+        "refreshToken": refresh_token,
+        "needRefresh": False,
+        "authInfo": {"userName": name, "orgId": ""}
     }
-    status_code, status_resp = api_call(
-        "POST", "/api/v3/user/status", status_body,
-        machine_id, encode_version="1", magic="sign"
-    )
-    print(f"  HTTP {status_code}")
-    if status_code == 200:
-        print(f"  响应: {json.dumps(status_resp, ensure_ascii=False)[:300]}")
-    else:
-        print(f"  错误: {status_resp.get('body', str(status_resp))[:200]}")
+
+    endpoints_to_try = [
+        BIG_MODEL_ENDPOINT,
+        "https://lingma-api.tongyi.aliyun.com/algo",
+        "https://devops.aliyun.com/algo",
+    ]
+    status_code, status_resp = 0, {}
+    for ep in endpoints_to_try:
+        print(f"\n  [*] {ep}/api/v3/user/status ...")
+        sc, sr = api_call("POST", "/api/v3/user/status", status_body,
+                          machine_id, encode_version="1", magic="sign", endpoint=ep)
+        print(f"    HTTP {sc}")
+        if sc == 200:
+            status_code, status_resp = sc, sr
+            print(f"    ✅ {json.dumps(sr, ensure_ascii=False)[:500]}")
+            break
+        else:
+            body = sr.get("body", str(sr))[:200]
+            if sc == 403:
+                print(f"    403 WAF: {body}")
+            else:
+                print(f"    {body}")
+        # 短暂延迟避免触发限流
+        time.sleep(1)
 
     # ── Phase 5: 凭据保存 ──
     print(f"\n{'='*60}\nPhase 5: 凭据保存\n{'='*60}")
