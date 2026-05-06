@@ -53,8 +53,10 @@ ALT_COSY_KEY = "&Q3C3!N5mP5bbNcyryMY@KZtUFLRGbTe"
 # API 端点
 BIG_MODEL_ENDPOINT = "https://lingma.alibabacloud.com/algo"
 
-# OAuth Base URL (IDA @ 0x14252655e)
-OAUTH_BASE_URL = "https://devops.aliyun.com/lingma/login"
+# OAuth Base URL — 国际站 (IDA: off_146011C20 动态配置)
+# LSP 实际使用的是国际站: https://lingma.alibabacloud.com/lingma/login
+# 国内站: https://devops.aliyun.com/lingma/login (500 错误)
+OAUTH_BASE_URL = "https://lingma.alibabacloud.com/lingma/login"
 
 # 自定义 base64 字母表 (IDA @ encodeToString 0x1404549e0)
 ALPHA = '_doRTgHZBKcGVjlvpC,@aFSx#DPuNJme&i*MzLOEn)sUrthbf%Y^w.(kIQyXqWA!'
@@ -219,11 +221,17 @@ def generate_pkce() -> tuple:
 
 
 def build_oauth_url(nonce: str, port: int, challenge: str, machine_id: str) -> str:
-    """构造 OAuth URL (IDA @ PrepareLoginRequest 0x141a198a0)"""
+    """
+    构造 OAuth URL (IDA @ PrepareLoginRequest 0x141a198a0)
+
+    state 参数格式: "{version}-{nonce}"
+      - version = "2" (当前解析版本 V2)
+      - nonce = UUID 去横线 (32 字符)
+    """
     params = urllib.parse.urlencode({
         "nonce": nonce,
         "port": port,
-        "state": nonce,
+        "state": f"2-{nonce}",  # V2 格式: 版本前缀 + nonce
         "challenge": challenge,
         "challenge_method": "S256",
         "machine_id": machine_id,
