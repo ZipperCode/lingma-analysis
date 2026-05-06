@@ -1,20 +1,34 @@
 #!/usr/bin/env python3
 """
-Lingma 37510 回调模拟服务器 — 完整实现
-基于 IDA Pro 逆向分析 v2.11.2
+Lingma 37510 回调模拟服务器 v3.0 — 完整认证流程
+基于 IDA Pro 逆向 v2.11.2 (2026-05-06)
 
-实现链路:
-  auth/login LSP → DeviceLogin (nonce管理+Auth编码)
-  → 浏览器认证 → 回调37510 → HandleAuthCallback
-  → GetQuotaAndTokenById → fetchAuthStatusWithUri
-  → CompleteUserLogin → 凭据保存
+完整实现:
+  Phase 1: 生成 PKCE OAuth URL (或通过 LSP 获取)
+  Phase 2: 启动 37510 HTTP 服务器等待回调
+  Phase 3: 解析回调参数 (V2: auth/token 或 V1: aid/uid/name)
+  Phase 4: 模拟后端 API 调用 (user/login + user/status)
+  Phase 5: 凭据保存
+
+Callback V2 格式 (当前二进制版本):
+  /auth/callback?state=<nonce>&auth=<encoded>&token=<encoded>
+    - auth: CustomDecryptParts(auth, 3) → [UID, AID, Name]
+    - token: parseAuthToken(token) → [Token, RefreshToken, ExpireTime]
+
+Callback V1 格式 (兼容):
+  /auth/callback?state=<nonce>&aid=<id>&uid=<id>&name=<email>
 
 使用方法:
-  1. 确保 Lingma 正在运行 (提供 LSP WebSocket 获取 login URL)
-  2. python tools/lingma_37510_server.py
-  3. 浏览器中完成登录
-  4. COSY 凭据自动保存
+  # 模式 1: 通过 LSP 获取 URL (需 Lingma 运行)
+  python tools/lingma_37510_server.py
+
+  # 模式 2: 完全独立 (自动生成 URL)
+  python tools/lingma_37510_server.py --standalone
+
+  # 模式 3: 指定参数
+  python tools/lingma_37510_server.py --standalone --client-id your_client_id
 """
+import argparse
 import base64
 import hashlib
 import http.server
@@ -40,16 +54,20 @@ from pathlib import Path
 CALLBACK_PORT = 37510
 LSP_PORT = 37010
 
-# Cosy-Key (IDA @ addBigModelSignatureHeaders)
+# Cosy-Key (IDA @ addBigModelSignatureHeaders 0x14087e5e0)
 COSY_KEY = "d2FyLCB3YXIgbmV2ZXIgY2hhbmdlcw=="
 ALT_COSY_KEY = "&Q3C3!N5mP5bbNcyryMY@KZtUFLRGbTe"
 
 # API 端点
 BIG_MODEL_ENDPOINT = "https://lingma.alibabacloud.com/algo"
+# 备用: https://lingma-api.tongyi.aliyun.com/algo
 
-# 自定义 base64 字母表 (IDA: encodeToString 逆向)
+# 自定义 base64 字母表 (IDA: encodeToString @ 0x1404549e0)
 ALPHA = '_doRTgHZBKcGVjlvpC,@aFSx#DPuNJme&i*MzLOEn)sUrthbf%Y^w.(kIQyXqWA!'
 STD_B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+
+# OAuth 基础 URL (IDA @ 0x14252655e)
+OAUTH_BASE_URL = "https://devops.aliyun.com/lingma/login"
 
 # ============================================================
 # 全局 nonce → context 映射 (模拟 IDA: qword_1460D9528)
@@ -108,16 +126,22 @@ def decode_string(body: str) -> bytes:
     return _custom_b64_decode(b0 + b1 + b2)
 
 
+def custom_decrypt_parts(encoded: str, expected_parts: int = 3) -> list:
+    """
+    CustomDecryptParts (IDA @ 0x140455ca0)
+    1. decodeString (自定义base64解码)
+    2. split("\n", expected_parts)
+    """
+    decoded = decode_string(encoded)
+    text = decoded.decode('utf-8')
+    parts = text.split('\n', expected_parts - 1)
+    return parts
+
+
 # ============================================================
 # 签名算法 (IDA @ addBigModelSignatureHeaders 0x14087e5e0)
 # ============================================================
 def md5_sign(encoded_body: str, date_str: str, use_alt_key: bool = False) -> str:
-    """
-    MD5(payload + "&" + key + "&" + date)
-    - payload = base64(body) = Cosy-User header
-    - key = Cosy-Key (硬编码)
-    - date = RFC1123
-    """
     key = ALT_COSY_KEY if use_alt_key else COSY_KEY
     raw = f"{encoded_body}&{key}&{date_str}"
     return hashlib.md5(raw.encode()).hexdigest()
@@ -128,13 +152,10 @@ def md5_sign(encoded_body: str, date_str: str, use_alt_key: bool = False) -> str
 # ============================================================
 def build_headers(body_str: str, machine_id: str, client_type: str = "2",
                   cosy_version: str = "20", date_str: str = None) -> dict:
-    """构造完整请求头 (基础头 + 签名头)"""
     if date_str is None:
         date_str = datetime.now(timezone.utc).strftime('%a, %d %b %Y %H:%M:%S GMT')
-
     encoded = base64.b64encode(body_str.encode()).decode()
-
-    headers = {
+    return {
         "Content-Type": "application/json",
         "Accept": "application/json",
         "Accept-Encoding": "gzip",
@@ -152,22 +173,17 @@ def build_headers(body_str: str, machine_id: str, client_type: str = "2",
         "Cosy-User": encoded,
         "Signature": md5_sign(encoded, date_str),
     }
-    return headers
 
 
 # ============================================================
-# Auth/TokenString 编码 (IDA @ ToLoginAuthCallbackParam 0x141a1ce00)
+# Auth/TokenString 编码/解码
 # ============================================================
-def build_auth_string(uid: str, aid: str, name: str, org_id: str = "") -> str:
+def build_auth_string(uid: str, aid: str, name: str) -> str:
     """
-    构造 Auth 参数
-    1. JSON marshal CallbackAuthInfo {UID, AID, Name, OrgId}
-    2. encodeToString (自定义base64)
-    3. URL-escape
+    构造 Auth 参数 (IDA @ ToLoginAuthCallbackParam)
+    JSON{UID, AID, Name} → encodeToString → URL-escape
     """
     auth_info = {"UID": uid, "AID": aid, "Name": name}
-    if org_id:
-        auth_info["OrgId"] = org_id
     auth_json = json.dumps(auth_info, ensure_ascii=False, separators=(",", ":"))
     encoded = encode_to_string(auth_json.encode())
     return urllib.parse.quote(encoded, safe='')
@@ -176,9 +192,7 @@ def build_auth_string(uid: str, aid: str, name: str, org_id: str = "") -> str:
 def build_token_string(token: str, refresh_token: str, expire_time: int) -> str:
     """
     构造 TokenString 参数
-    1. fmt.Sprintf("%s\n%s\n%d", token, refresh_token, expireTime)
-    2. encodeToString
-    3. URL-escape
+    "%s\n%s\n%d" → encodeToString → URL-escape
     """
     formatted = f"{token}\n{refresh_token}\n{expire_time}"
     encoded = encode_to_string(formatted.encode())
@@ -187,22 +201,69 @@ def build_token_string(token: str, refresh_token: str, expire_time: int) -> str:
 
 def parse_auth_string(auth_str: str) -> dict:
     """
-    解析 Auth 参数 (IDA @ parseAuthInfoV3 0x141a21b80)
-    1. URL-unescape
-    2. decodeString (自定义base64)
-    3. JSON parse
+    解析 Auth 参数 (V3 格式: JSON)
+    URL-unescape → decodeString → JSON parse
     """
     unescaped = urllib.parse.unquote(auth_str)
     decoded = decode_string(unescaped)
     return json.loads(decoded.decode())
 
 
+def parse_auth_v2(params: dict) -> dict:
+    """
+    V2 参数解析 (IDA @ parseAuthInfoV2 0x141a21800)
+    支持 auth/token 或 aid/uid/name
+
+    返回: {uid, aid, name, token, refresh_token, expire_time}
+    """
+    result = {}
+
+    if "auth" in params:
+        # V2 格式: auth = CustomDecryptParts(3) → [UID, AID, Name]
+        auth_encoded = params["auth"]
+        parts = custom_decrypt_parts(auth_encoded, 3)
+        if len(parts) >= 3:
+            result.update({
+                "uid": parts[0],
+                "aid": parts[1],
+                "name": parts[2],
+            })
+            print(f"  [V2] auth decoded: UID={parts[0][:20]}... AID={parts[1][:20]}... Name={parts[2][:30]}...")
+    elif "aid" in params and "uid" in params:
+        # V1 兼容格式
+        result.update({
+            "uid": params.get("uid", ""),
+            "aid": params.get("aid", ""),
+            "name": params.get("name", ""),
+        })
+        print(f"  [V1] params: UID={result['uid'][:20]}... AID={result['aid'][:20]}... Name={result['name'][:30]}...")
+
+    if "token" in params:
+        # V2 格式: token = parseAuthToken(token) → [Token, RefreshToken, ExpireTime]
+        token_encoded = params["token"]
+        parts = custom_decrypt_parts(token_encoded, 3)
+        if len(parts) >= 3:
+            expire_time = 0
+            try:
+                expire_time = int(parts[2])
+            except ValueError:
+                pass
+            result.update({
+                "token": parts[0],
+                "refresh_token": parts[1],
+                "expire_time": expire_time,
+            })
+            print(f"  [V2] token decoded: Token={parts[0][:20]}... Expire={expire_time}")
+
+    return result
+
+
 # ============================================================
 # PKCE 工具
 # ============================================================
 def generate_nonce() -> str:
-    """生成 nonce (UUID 去横线) — 对应 github.com/google/uuid + strings.Replace"""
-    return uuid.uuid4().hex  # 32 chars, no dashes
+    """生成 nonce (UUID 去横线)"""
+    return uuid.uuid4().hex
 
 
 def generate_pkce() -> tuple:
@@ -211,6 +272,19 @@ def generate_pkce() -> tuple:
     digest = hashlib.sha256(verifier.encode()).digest()
     challenge = base64.urlsafe_b64encode(digest).rstrip(b'=').decode()
     return verifier, challenge
+
+
+def build_oauth_url(nonce: str, port: int, challenge: str, machine_id: str) -> str:
+    """构造 OAuth URL (IDA @ PrepareLoginRequest 0x141a198a0)"""
+    params = urllib.parse.urlencode({
+        "nonce": nonce,
+        "port": port,
+        "state": nonce,
+        "challenge": challenge,
+        "challenge_method": "S256",
+        "machine_id": machine_id,
+    })
+    return f"{OAUTH_BASE_URL}?{params}"
 
 
 # ============================================================
@@ -250,10 +324,7 @@ def parse_lsp_frames(payload: bytes) -> list:
 
 
 def get_login_url_via_lsp() -> dict:
-    """
-    通过 Lingma LSP auth/login 获取 login URL
-    同时捕获 auth/report 推送的 token 信息
-    """
+    """通过 Lingma LSP auth/login 获取 login URL"""
     import websocket as ws_lib
 
     print("[*] 连接到 Lingma WebSocket...")
@@ -265,7 +336,7 @@ def get_login_url_via_lsp() -> dict:
         # Initialize
         ws.send(make_lsp_frame("initialize", {
             "processId": None,
-            "clientInfo": {"name": "lingma-37510-sim", "version": "2.0"},
+            "clientInfo": {"name": "lingma-37510-sim", "version": "3.0"},
             "rootUri": "file:///C:/sim",
             "capabilities": {},
             "workspaceFolders": [{"uri": "file:///C:/sim", "name": "sim"}],
@@ -273,18 +344,6 @@ def get_login_url_via_lsp() -> dict:
         ws.settimeout(3)
         try:
             ws.recv()
-        except:
-            pass
-
-        # 先获取当前状态
-        ws.send(make_lsp_frame("auth/getStatus", {}, 2))
-        ws.settimeout(5)
-        try:
-            raw = ws.recv()
-            for m in parse_lsp_frames(raw.encode() if isinstance(raw, str) else raw):
-                r = m.get("result", {})
-                if r:
-                    result["pre_status"] = r
         except:
             pass
 
@@ -303,8 +362,7 @@ def get_login_url_via_lsp() -> dict:
                 raw = ws.recv()
             except ws_lib.WebSocketTimeoutException:
                 continue
-            except Exception as e:
-                print(f"  [!] {e}")
+            except Exception:
                 break
 
             raw_bytes = raw.encode() if isinstance(raw, str) else raw
@@ -332,21 +390,17 @@ def get_login_url_via_lsp() -> dict:
                 "login_result": login_result,
                 "auth_report": auth_report or {},
             })
-
-            print(f"  [*] Login URL: {login_url[:100]}...")
             return result
-        else:
-            print("  [!] 未获取到 login URL")
-            return {}
 
     except Exception as e:
         print(f"  [!] LSP Error: {e}")
-        return {}
     finally:
         try:
             ws.close()
         except:
             pass
+
+    return {}
 
 
 # ============================================================
@@ -354,8 +408,7 @@ def get_login_url_via_lsp() -> dict:
 # ============================================================
 def call_user_status(machine_id: str, uid: str) -> tuple:
     """
-    调用 /api/v3/user/status 获取用户状态和凭据
-    对应 IDA: fetchAuthStatusWithUri("/api/v3/user/status")
+    调用 /api/v3/user/status (IDA @ fetchAuthStatusWithUri 0x141a1f260)
     """
     body = json.dumps({"uid": uid}, separators=(",", ":"))
     url = f"{BIG_MODEL_ENDPOINT}/api/v3/user/status"
@@ -378,7 +431,7 @@ def call_user_status(machine_id: str, uid: str) -> tuple:
 
 
 def call_user_login(machine_id: str, aid: str, uid: str, name: str) -> tuple:
-    """调用 /api/v3/user/login 进行登录"""
+    """调用 /api/v3/user/login (模拟 CompleteLoginWithSelectAccount 中的远程调用)"""
     body = json.dumps({"aid": aid, "uid": uid, "name": name}, separators=(",", ":"))
     url = f"{BIG_MODEL_ENDPOINT}/api/v3/user/login"
     date_str = datetime.now(timezone.utc).strftime('%a, %d %b %Y %H:%M:%S GMT')
@@ -400,10 +453,18 @@ def call_user_login(machine_id: str, aid: str, uid: str, name: str) -> tuple:
 
 
 # ============================================================
-# 回调处理 (模拟 HandleAuthCallback 0x141a18dc0)
+# 37510 HTTP 回调处理
 # ============================================================
 class CallbackHandler(http.server.BaseHTTPRequestHandler):
-    """37510 HTTP 回调处理器"""
+    """
+    37510 HTTP 回调处理器
+
+    处理流程 (IDA @ LoginCallback 0x141a133a0):
+      1. 解析 query 参数
+      2. 查找 nonce 验证
+      3. parseAuthInfo (V1: aid/uid/name | V2: auth/token)
+      4. 返回 HTML 结果页面
+    """
     captured = None
     result_event = threading.Event()
 
@@ -412,29 +473,58 @@ class CallbackHandler(http.server.BaseHTTPRequestHandler):
         params = urllib.parse.parse_qs(parsed.query)
         flat = {k: v[0] for k, v in params.items()}
 
-        CallbackHandler.captured = {
-            "path": self.path,
-            "query_params": flat,
-            "timestamp": time.time(),
-        }
-
-        print(f'\n{"="*60}')
-        print(f'[*] 收到 OAuth 回调喵~ φ(≧ω≦*)♪')
-        print(f'  state: {flat.get("state", "N/A")}')
-        print(f'  aid:   {flat.get("aid", "N/A")}')
-        print(f'  uid:   {flat.get("uid", "N/A")}')
-        print(f'  name:  {flat.get("name", "N/A")}')
-
-        # 返回 HTML (模拟 loginResultPageWithStep)
+        # 设置 CORS header (模拟 IDA: Access-Control-Allow-Origin: *)
         self.send_response(200)
+        self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Connection", "close")
         self.end_headers()
-        self.wfile.write(
-            b"<html><body><h1>Login successful</h1>"
-            b"<p>You may close this window.</p></body></html>"
-        )
 
+        state = flat.get("state", "")
+        has_auth = "auth" in flat
+        has_token = "token" in flat
+        has_aid = "aid" in flat
+
+        # 验证 nonce
+        nonce_valid = state in _nonce_map if state else False
+
+        print(f'\n{"="*60}')
+        print(f'[*] 收到 OAuth 回调~ φ(≧ω≦*)♪')
+        print(f'  Path: {self.path[:120]}')
+        print(f'  State: {state[:40]}...')
+        print(f'  Nonce valid: {nonce_valid}')
+        print(f'  Format: {"V2 (auth+token)" if has_auth else "V1 (aid/uid/name)" if has_aid else "unknown"}')
+
+        # 解析认证参数 (模拟 parseAuthInfo/parseAuthInfoV2)
+        auth_data = parse_auth_v2(flat)
+
+        CallbackHandler.captured = {
+            "path": self.path,
+            "query_params": flat,
+            "auth_data": auth_data,
+            "timestamp": time.time(),
+            "nonce_valid": nonce_valid,
+        }
+
+        # 渲染结果页面 (模拟 loginResultPageWithStep)
+        if auth_data.get("uid"):
+            uid = auth_data["uid"]
+            aid = auth_data.get("aid", uid)
+            name = auth_data.get("name", "")
+            html = f"""<html><body style="font-family:sans-serif;text-align:center;margin-top:100px">
+<h1>✅ 登录成功</h1>
+<p>UID: {uid[:20]}...</p>
+<p>Name: {name[:30]}</p>
+<p>Token: {'✅' if auth_data.get('token') else '❌'}</p>
+<p style="color:#888;font-size:12px">你可以关闭此窗口</p>
+</body></html>"""
+        else:
+            html = """<html><body style="font-family:sans-serif;text-align:center;margin-top:100px">
+<h1>❌ 登录失败</h1>
+<p>未获取到认证参数</p>
+</body></html>"""
+
+        self.wfile.write(html.encode('utf-8'))
         CallbackHandler.result_event.set()
 
     def log_message(self, format, *args):
@@ -445,7 +535,6 @@ class CallbackHandler(http.server.BaseHTTPRequestHandler):
 # 凭据保存
 # ============================================================
 def save_portable_creds(credentials: dict) -> Path:
-    """保存便携凭据"""
     config_dir = Path.home() / ".lingma"
     config_dir.mkdir(parents=True, exist_ok=True)
     config_path = config_dir / "portable_config.json"
@@ -461,73 +550,84 @@ def save_portable_creds(credentials: dict) -> Path:
 # 主流程
 # ============================================================
 def main():
+    parser = argparse.ArgumentParser(description="Lingma 37510 回调模拟服务器 v3.0")
+    parser.add_argument("--standalone", action="store_true",
+                        help="完全独立模式 (不依赖 Lingma LSP)")
+    parser.add_argument("--port", type=int, default=CALLBACK_PORT,
+                        help=f"回调端口 (默认: {CALLBACK_PORT})")
+    parser.add_argument("--machine-id", help="Machine ID (自动生成)")
+    args = parser.parse_args()
+
+    port = args.port
+    machine_id = args.machine_id or str(uuid.uuid4())
+    standalone = args.standalone
+
     print("=" * 60)
-    print("Lingma 37510 回调模拟服务器 v2.0")
-    print("基于 IDA Pro 逆向分析 v2.11.2")
+    print("Lingma 37510 回调模拟服务器 v3.0")
+    print("基于 IDA Pro 逆向 v2.11.2")
+    print(f"模式: {'完全独立' if standalone else '通过 Lingma LSP'}")
     print("=" * 60)
 
-    # 生成 machine_id
-    machine_id = str(uuid.uuid4())
-    print(f"[*] Machine ID: {machine_id}")
-
-    # ── Phase 1: 获取 login URL ──
+    # ========== Phase 1: 获取/生成 Login URL ==========
     print(f"\n{'='*60}")
-    print(f"Phase 1: 获取 Login URL (LSP :{LSP_PORT})")
+    print(f"Phase 1: {'生成' if standalone else '获取'} Login URL")
     print(f"{'='*60}")
 
-    login_info = get_login_url_via_lsp()
-    if not login_info.get("login_url"):
-        print("[!] 获取 login URL 失败")
-        print("  请确保 Lingma 正在运行")
-        sys.exit(1)
+    if standalone:
+        # 完全独立模式: 自己生成 PKCE OAuth URL
+        nonce = generate_nonce()
+        verifier, challenge = generate_pkce()
+        login_url = build_oauth_url(nonce, port, challenge, machine_id)
+        login_info = {
+            "login_url": login_url,
+            "url_params": {"state": nonce, "nonce": nonce},
+        }
+        # 存储 nonce 上下文 (模拟 qword_1460D9528)
+        _nonce_map[nonce] = {"timestamp": time.time(), "verifier": verifier}
+        print(f"  [*] Nonce: {nonce[:20]}...")
+        print(f"  [*] PKCE Verifier: {verifier[:20]}...")
+        print(f"  [*] Login URL: {login_url[:120]}...")
+    else:
+        login_info = get_login_url_via_lsp()
+        if not login_info.get("login_url"):
+            print("[!] 获取 login URL 失败，请确保 Lingma 正在运行")
+            print("  提示: 使用 --standalone 模式可完全独立运行")
+            sys.exit(1)
 
-    login_url = login_info["login_url"]
-    auth_report = login_info.get("auth_report", {})
-    url_params = login_info.get("url_params", {})
+        login_url = login_info["login_url"]
+        url_params = login_info.get("url_params", {})
+        state = url_params.get("state", "")
+        if state:
+            _nonce_map[state] = {"timestamp": time.time(), "via_lsp": True}
+        auth_report = login_info.get("auth_report", {})
+        if auth_report:
+            print(f"  [*] auth/report 推送: {json.dumps(auth_report, ensure_ascii=False)[:200]}")
 
-    # 从 url_params 提取 state 和其他参数
-    state = url_params.get("state", "")
-    print(f"\n  state: {state[:40]}...")
-
-    # 检查是否已有 auth/report (已登录状态)
-    if auth_report:
-        print(f"\n  [*] auth/report 推送:")
-        for k in ("token", "refreshToken", "uid", "name"):
-            if k in auth_report:
-                v = str(auth_report[k])[:40]
-                print(f"    {k}: {v}...")
-
-    # ── Phase 2: 启动 37510 服务器 ──
+    # ========== Phase 2: 启动 37510 服务器 ==========
     print(f"\n{'='*60}")
-    print(f"Phase 2: 启动回调服务器 :{CALLBACK_PORT}")
+    print(f"Phase 2: 启动回调服务器 :{port}")
     print(f"{'='*60}")
 
-    server = http.server.HTTPServer(("127.0.0.1", CALLBACK_PORT), CallbackHandler)
+    server = http.server.HTTPServer(("127.0.0.1", port), CallbackHandler)
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
-    print(f"  [*] http://127.0.0.1:{CALLBACK_PORT}/auth/callback")
+    print(f"  [*] http://127.0.0.1:{port}/auth/callback")
 
-    # ── Phase 3: 打开浏览器 ──
+    # ========== Phase 3: 打开浏览器 ==========
     print(f"\n{'='*60}")
     print(f"Phase 3: 打开浏览器完成登录")
     print(f"{'='*60}")
 
-    # 如果 URL 中的 redirect_port 不是 37510，修改 URL
-    final_url = login_url
-    if "port=" in login_url:
-        # 修改 redirect_uri 中的端口
-        final_url = re.sub(r'port=(\d+)', f'port={CALLBACK_PORT}', login_url)
-        # 也要修改 redirect_uri 参数中的端口
-        final_url = re.sub(
-            r'redirect_uri=[^&]*127\.0\.0\.1%3A\d+',
-            f'redirect_uri=http%3A%2F%2F127.0.0.1%3A{CALLBACK_PORT}%2Fauth%2Fcallback',
-            final_url
-        )
+    final_url = login_info["login_url"]
+    # 确保回调端口正确
+    if "port=" in final_url and not standalone:
+        final_url = re.sub(r'port=(\d+)', f'port={port}', final_url)
 
     print(f"  URL: {final_url[:120]}...")
+    print(f"  请在浏览器中完成认证...")
     webbrowser.open(final_url)
 
-    # ── Phase 4: 等待回调 ──
+    # ========== Phase 4: 等待回调 ==========
     print(f"\n{'='*60}")
     print(f"Phase 4: 等待 OAuth 回调 (超时 180s)")
     print(f"{'='*60}")
@@ -545,94 +645,71 @@ def main():
         sys.exit(1)
 
     params = callback_data.get("query_params", {})
-    cb_aid = params.get("aid", "")
-    cb_uid = params.get("uid", "")
-    cb_name = params.get("name", "")
-    cb_state = params.get("state", "")
+    auth_data = callback_data.get("auth_data", {})
 
-    # ── Phase 5: 处理后端 API 交互 ──
+    cb_aid = auth_data.get("aid", params.get("aid", ""))
+    cb_uid = auth_data.get("uid", params.get("uid", ""))
+    cb_name = auth_data.get("name", params.get("name", ""))
+    cb_token = auth_data.get("token", params.get("token", ""))
+    cb_refresh = auth_data.get("refresh_token", "")
+
+    if not cb_uid:
+        print("[!] 回调中未获取到用户信息")
+        print(f"  参数: {json.dumps(params, ensure_ascii=False)[:200]}")
+        sys.exit(1)
+
+    # ========== Phase 5: 后端 API 交互 ==========
     print(f"\n{'='*60}")
     print(f"Phase 5: 后端 API 交互")
     print(f"{'='*60}")
 
-    # 5a: 构造 Auth 和 TokenString (模拟 ToLoginAuthCallbackParam)
-    print(f"\n  [*] 构造 Auth 参数...")
-    auth = build_auth_string(cb_uid, cb_aid, cb_name)
-    print(f"  Auth ({len(auth)} chars): {auth[:60]}...")
-
-    # 如果 auth/report 中有 token，构造 TokenString
-    token = auth_report.get("token", "") if auth_report else ""
-    refresh_token = auth_report.get("refreshToken", "") if auth_report else ""
-    expire_time = auth_report.get("tokenExpireTime", 0) if auth_report else 0
-
-    if token and refresh_token:
-        token_str = build_token_string(token, refresh_token, int(time.time() * 1000) + 86400000)
-        print(f"  TokenString ({len(token_str)} chars)")
-    else:
-        token_str = ""
-        print(f"  TokenString: (空)")
+    # 5a: 构造 Auth 参数 (IDA @ ToLoginAuthCallbackParam 0x141a1ce00)
+    print(f"\n  [*] 构造 Auth/Token 参数...")
+    auth_encoded = build_auth_string(cb_uid, cb_aid, cb_name)
+    print(f"  Auth ({len(auth_encoded)} chars)")
+    if cb_token and cb_refresh:
+        expire = int(time.time() * 1000) + 86400000
+        token_encoded = build_token_string(cb_token, cb_refresh, expire)
+        print(f"  TokenString ({len(token_encoded)} chars)")
 
     # 5b: 调用 /api/v3/user/login
     print(f"\n  [*] 调用 /api/v3/user/login ...")
     login_status, login_resp = call_user_login(machine_id, cb_aid, cb_uid, cb_name)
     print(f"  -> HTTP {login_status}")
-
     if login_status == 200:
         print(f"  response: {json.dumps(login_resp, ensure_ascii=False)[:200]}")
-    elif login_status != 0:
+    else:
         err = login_resp.get("body", str(login_resp))[:200]
         print(f"  error: {err}")
-    else:
-        print(f"  error: {login_resp.get('error', 'unknown')}")
 
-    # 5c: 调用 /api/v3/user/status
+    # 5c: 调用 /api/v3/user/status (IDA @ GetQuotaAndTokenById)
     print(f"\n  [*] 调用 /api/v3/user/status ...")
     status_code, status_resp = call_user_status(machine_id, cb_uid)
     print(f"  -> HTTP {status_code}")
-
-    user_data = {}
     if status_code == 200:
-        print(f"  response keys: {list(status_resp.keys())[:10]}")
-        user_data = status_resp
-    elif status_code != 0:
-        err = status_resp.get("body", str(status_resp))[:200]
-        print(f"  error: {err}")
+        print(f"  response: {json.dumps(status_resp, ensure_ascii=False)[:300]}")
 
-    # ── Phase 6: 结果 ──
+    # ========== Phase 6: 凭据保存 ==========
     print(f"\n{'='*60}")
-    print(f"Phase 6: 结果")
+    print(f"Phase 6: 凭据保存")
     print(f"{'='*60}")
 
-    if status_code == 200:
-        print(f"\n  [✓] 后端 API 调用成功！")
-        print(f"  用户状态: {json.dumps(user_data, ensure_ascii=False)[:300]}")
-    elif login_status == 200:
-        print(f"\n  [~] Login 成功但 Status 失败")
-    else:
-        print(f"\n  [✗] 后端 API 调用失败")
-        print(f"  API 可能被 WAF 拦截，需要检查签名和请求头是否正确")
-        print(f"\n  建议:")
-        print(f"  1. 使用 Frida 抓包对比 lingma 的实际请求")
-        print(f"  2. 检查 endpoint 是否匹配 ({BIG_MODEL_ENDPOINT})")
-        print(f"  3. 尝试国内端点")
+    creds = {
+        "machine_id": machine_id,
+        "user_id": cb_uid,
+        "aid": cb_aid,
+        "name": cb_name,
+        "security_oauth_token": cb_token,
+        "refresh_token": cb_refresh,
+        "timestamp": int(time.time()),
+    }
 
-    # 保存凭据 (如果已从 auth/report 获取)
-    if auth_report:
-        creds = {
-            "machine_id": machine_id,
-            "user_id": auth_report.get("uid", cb_uid),
-            "user_name": auth_report.get("name", cb_name),
-            "security_oauth_token": auth_report.get("token", ""),
-            "refresh_token": auth_report.get("refreshToken", ""),
-            "expire_time": auth_report.get("tokenExpireTime", 0),
-        }
-        save_path = save_portable_creds(creds)
-        print(f"\n  使用方式:")
-        print(f"    from lingma_remote_api import LingmaRemoteAPI")
-        print(f"    api = LingmaRemoteAPI(config_file=r'{save_path}')")
-        print(f"    api.chat('你好')")
-
-    print(f"\n[*] 完成！喵~ o(*￣︶￣*)o")
+    config_path = save_portable_creds(creds)
+    print(f"\n[*] 完成! 凭据已保存到 {config_path}")
+    print(f"\n  使用 Chat API 测试:")
+    print(f"  python -c \"from lingma_remote_api import LingmaRemoteAPI;")
+    print(f"  api=LingmaRemoteAPI(portable_config=r'{config_path}');")
+    print(f"  print(api.chat('你好'))\"")
 
 
 if __name__ == "__main__":

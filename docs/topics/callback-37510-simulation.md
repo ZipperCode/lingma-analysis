@@ -317,80 +317,200 @@ Lingma 维护一个全局 nonce → `context.Context` 映射（`qword_1460D9528`
 
 ---
 
-## 3. Phase 2：后端 API 交互
+## 3. Phase 2：37510 Callback 完整处理链路（更新于 2026-05-06）
 
-### 3.1 HandleAuthCallback——回调处理 & COSY 凭据获取（更新于 2026-05-05）
+### 3.1 浏览器回调参数格式说明
 
-**函数：** `HandleAuthCallback` @ `0x141a18dc0`
+当用户在阿里云 OAuth 完成认证后，阿里云自定义登录页面 `https://devops.aliyun.com/lingma/login` 会在客户端 JS 中完成 token 交换，然后重定向浏览器到：
 
 ```
-HandleAuthCallback(ctx, {Nonce, Auth, TokenString})
-  │
-  ├─ ① 验证 nonce（遍历 qword_1460D9528 映射）
-  │    ├─ runtime_mapiterinit + runtime_memequal → 匹配 nonce
-  │    ├─ 匹配 → 取出 context，进入处理
-  │    └─ 未匹配 → 返回错误: "Invalid login nonce or consumed, ignore"
-  │
-  ├─ ② parseAuthInfoV3(auth) @ 0x141a21b80
-  │    ├─ URL unescape → decodeString (自定义 base64 解码) → JSON parse
-  │    └─ return {Uid, Aid, Name, OrgId}
-  │
-  ├─ ③ parseAuthToken(token) @ 0x141a213e0
-  │    ├─ URL unescape → decodeString → split("\n")
-  │    └─ return {Token, RefreshToken, ExpireTime}
-  │
-  ├─ ④ 检查重复登录
-  │    ├─ GetCachedUserInfo() → 比较 UID, OrgId, Token, RefreshToken, ExpireTime
-  │    └─ 全部匹配 → "user has already login, ignore" → 跳过
-  │
-  └─ ⑤ CompleteLoginWithSelectAccount @ 0x141a0fee0
-       ├─ 构建 LoginUserInfo {Uid, Aid, Name, OrgId, Token, RefreshToken, ExpireTime}
-       ├─ 调用 GetQuotaAndTokenById @ 0x141a16120
-       │    ├─ ReadQuotaCache() → 缓存命中则直接返回
-       │    └─ fetchAuthStatusWithUri("/api/v3/user/status") @ 0x141a1f260
-       │         └─ buildRequest → addBasicHeaders + addBigModelSignatureHeaders
-       │         └─ HTTP POST → 解析用户配额 + token 信息
-       └─ 保存 COSY 凭据 → AES 加密 → 写入 cache/user
+http://127.0.0.1:37510/auth/callback?state=<nonce>&auth=<encoded>&token=<encoded>
 ```
 
-**关键验证逻辑（HandleAuthCallback 伪代码）：**
+| 参数 | 来源 | 解码方式 | 解码后内容 |
+|------|------|----------|-----------|
+| `state` | UUID 去横线（32 字符） | 明文 | PKCE nonce |
+| `auth` | `encodeToString(JSON({UID, AID, Name}))` | `CustomDecryptParts(auth, 3)` | `{UID, AID, Name}` 3 部分 |
+| `token` | `encodeToString(fmt.Sprintf("%s\n%s\n%d", Token, RefreshToken, ExpireTime))` | `parseAuthToken` | `{Token, RefreshToken, ExpireTime}` |
+
+> **注意**：V2 版本（当前二进制 `off_146011C70` 版本字节 = `'2'`）直接从 query 参数读取 `auth` 和 `token`，而 V1 版本从 query 参数读取 `aid`、`uid`、`name` 三个独立参数。两种格式均可被 `LoginCallback` 处理器识别。
+
+### 3.2 LoginCallback——37510 HTTP 回调入口
+
+**函数：** `LoginCallback` @ `0x141a133a0`
+
+```
+LoginCallback(ResponseWriter, Request)
+  │
+  ├─ ① 设置响应头 Access-Control-Allow-Origin: *
+  │
+  ├─ ② cosy_util_ParseParameters(Request) → 解析 URL query 参数
+  │    提取: "state"(5), "auth"(4), "token"(5) 等
+  │
+  ├─ ③ 提取 "state" 参数 → 查找 nonce 映射
+  │    ├─ runtime_mapaccess1_faststr(qword_1460D9528, state)
+  │    ├─ 匹配成功 → 取出 context
+  │    └─ 失败 → "Invalid login nonce" → 渲染错误页
+  │
+  ├─ ④ parseAuthInfo(query_params)  ← ★ 解析 auth/token
+  │    ├─ V1: 读取 "aid"(3) + "uid"(3) + "name"(4)
+  │    └─ V2(当前): 
+  │         ├─ "auth"(4) → CustomDecryptParts(auth, 3)
+  │         │    ├─ decodeString (自定义 base64 解码)
+  │         │    └─ split("\n", 3) → {UID, AID, Name}
+  │         └─ "token"(5) → parseAuthToken(token)
+  │              ├─ decodeString
+  │              └─ split("\n") → {Token, RefreshToken, ExpireTime}
+  │
+  ├─ ⑤ 结果检查
+  │    ├─ 错误 → reportAuthResult + 渲染错误页
+  │    ├─ step==4 && "need" → 渲染 "need" 提示页
+  │    └─ 成功 → loginWithUserInfo(LoginInfoContext)  ← ★ 后续流程
+```
+
+#### 3.2.1 parseAuthInfo——参数解析（V2 版本）
+
+**函数：** `parseAuthInfo` @ `0x141a21660`
+
 ```go
-func HandleAuthCallback(nonce, auth, tokenString) {
-    // 1. 查找 nonce
-    ctx := nonceMap[nonce]
-    if ctx == nil { return error("invalid login nonce") }
-    defer delete(nonceMap, nonce)  // 一次性 nonce
-
-    // 2. 解析 Auth
-    info := parseAuthInfoV3(auth) // → {Uid, Aid, Name, OrgId}
-
-    // 3. 解析 Token
-    tokens := parseAuthToken(tokenString) // → {Token, RefreshToken, ExpireTime}
-
-    // 4. 检查重复
-    cached := GetCachedUserInfo()
-    if cached != nil &&
-       cached.Uid == info.Uid &&
-       cached.OrgId == info.OrgId &&
-       cached.Token == tokens.Token &&
-       cached.RefreshToken == tokens.RefreshToken &&
-       cached.ExpireTime == tokens.ExpireTime {
-        log("user has already login, ignore")
-        return nil
+func parseAuthInfo(params map[string]string) LoginInfoContext {
+    version := *(*byte)off_146011C70  // '2' (ASCII 50)
+    
+    if version == '1' {
+        // V1: 直接读取 aid, uid, name
+        aid = params["aid"]
+        uid = params["uid"]
+        name = params["name"]
+        return {Uid: uid, Aid: aid, Name: name}
+    } else {
+        // V2: CustomDecryptParts 解码 auth + token
+        authEncoded := params["auth"]
+        parts := CustomDecryptParts(authEncoded, 3) // → [UID, AID, Name]
+        
+        if time.Now().Unix() < someTimestamp {
+            // 条件不满足时只返回 auth info (byte_14616BD2F)
+            return {Uid: parts[0], Aid: parts[1], Name: parts[2]}
+        }
+        
+        // 完整解码 token
+        tokenEncoded := params["token"]
+        tokenInfo := parseAuthToken(tokenEncoded) // → [Token, RefreshToken, ExpireTime]
+        
+        return {
+            Uid: parts[0], Aid: parts[1], Name: parts[2],
+            Token: tokenInfo[0], RefreshToken: tokenInfo[1], ExpireTime: tokenInfo[2],
+        }
     }
-
-    // 5. 获取 COSY 凭据
-    return CompleteLoginWithSelectAccount(ctx, {
-        Uid: info.Uid, Aid: info.Aid,
-        Name: info.Name, OrgId: info.OrgId,
-        Token: tokens.Token,
-        RefreshToken: tokens.RefreshToken,
-        ExpireTime: tokens.ExpireTime,
-    })
 }
 ```
 
-### 3.2 API 端点清单
+### 3.3 loginWithUserInfo——登录信息处理核心
+
+**函数：** `loginWithUserInfo` @ `0x141a10ac0`
+
+该函数是登录的核心处理流程，负责获取用户授权信息、配额、token，最终完成 COSY 凭据获取：
+
+```
+loginWithUserInfo(LoginInfoContext{UserInfo, AuthStatus, ...})
+  │
+  ├─ ① GetGrantAuthInfosWrap(uid) @ vtable
+  │    ├─ API: /api/v3/user/grantAuthInfos
+  │    └─ → 返回用户加入的组织/授权列表
+  │
+  ├─ ② 检查授权列表
+  │    ├─ 错误 → "get user joined orgs fail." → 继续处理
+  │    ├─ 空列表 → "get user auth list empty."
+  │    │    └─ 渲染选择账号页 + 启动 async goroutine (func1)
+  │    ├─ 单组织 → 检查 orgId 合法性
+  │    │    ├─ 匹配 "personalToken" → CompleteUserLogin()
+  │    │    └─ 否则 → completeUserLoginWithOrganization()
+  │    └─ 多组织 → handleLoginWithMultiAccountInfos()
+  │
+  ├─ ③ GetQuotaAndTokenById(uid, name) @ 0x141a16120  ← ★ 远程 API
+  │    ├─ ReadQuotaCache() → 本地配额缓存
+  │    │   ├─ 缓存有效 (status==4) → 直接返回缓存数据
+  │    │   └─ 缓存过期/不存在 →
+  │    │        └─ fetchAuthStatusWithUri("/api/v3/user/status") → HTTP POST
+  │    │             ├─ buildRequest → addBasicHeaders + addBigModelSignatureHeaders
+  │    │             ├─ Signature 模式 (magic="none")
+  │    │             └─ 响应 → 解析 AuthStatusResult
+  │    │        └─ WriteQuotaCache() → 写入配额缓存
+  │    │        └─ UpdateOrgInfo() → 更新组织信息
+  │    │        └─ UpdateUserTypeTagAndPrivacy() → 更新用户标签
+  │    │
+  │    └─ 返回 AuthStatusResult 包含:
+  │        {Status, Name, Id, Token, Quota, WhitelistStatus,
+  │         Email, OrgId, OrgName, YxUid, AvatarUrl, ...}
+  │
+  ├─ ④ 状态检查
+  │    ├─ 错误状态 (status!=5) → 渲染错误页
+  │    ├─ PingBigModelServer() → 检查大模型服务
+  │    │   ├─ 成功 → reportAuthResult + 渲染成功页 (step=2)
+  │    │   └─ 失败 → 渲染 "服务不可用" 页
+  │    └─ 正常 → 进 CompleteUserLogin (见 3.5)
+```
+
+### 3.4 GetQuotaAndTokenById——配额与 Token 获取
+
+**函数：** `GetQuotaAndTokenById` @ `0x141a16120`
+
+```
+GetQuotaAndTokenById(httpServer, uid, name)
+  │
+  ├─ ReadQuotaCache(uid) → 读取本地配额缓存
+  │   ├─ 格式: 缓存文件中的结构化数据
+  │   └─ 检查 status==4 → 有效
+  │
+  ├─ 缓存有效:
+  │   └─ 直接返回 {Status, Id, Name, Quota, WhitelistStatus, Email, ...}
+  │
+  └─ 缓存无效:
+      ├─ fetchAuthStatusWithUri("/api/v3/user/status", uid) → HTTP POST
+      │   └─ 签名: Signature 模式 (magic="none")
+      │
+      ├─ WriteQuotaCache() → 写入配额缓存
+      │
+      ├─ 如果响应包含 org_info:
+      │   ├─ UpdateOrgInfo() → 更新组织信息
+      │   └─ SaveUserInfo() → 保存用户信息
+      │
+      ├─ 如果响应包含 user_type_tag:
+      │   └─ UpdateUserTypeTagAndPrivacy() → 更新标签
+      │
+      └─ 构建 AuthStatusResult → 返回
+```
+
+### 3.5 CompleteUserLogin——完成登录 & COSY 凭据获取
+
+**函数：** `CompleteUserLogin` @ `0x141a12200`
+
+```
+CompleteUserLogin(LoginInfoContext, ResponseWriter)
+  │
+  ├─ determineUserType() → 确定用户类型标志
+  │
+  ├─ 构建 UserInfo 结构
+  │   {Name, Aid, Uid, ..., SecurityOauthToken, RefreshToken, ExpireTime,
+  │    Email, AvatarUrl, PrivacyPolicy, ...}
+  │
+  ├─ saveUserInfoAndQuota() → ★ 加密保存到磁盘
+  │   ├─ AES-128-CBC(key=IV=machine_id[:16]) 加密
+  │   ├─ base64 编码
+  │   └─ 写入 ~/.lingma/cache/user
+  │
+  ├─ 失败 → reportAuthResult ERROR + 渲染错误页
+  │
+  └─ 成功 →
+      ├─ 判断登录结果页类型:
+      │   ├─ status==6 → 页类型 5
+      │   ├─ status==7 → 页类型 6
+      │   └─ 否则 → 根据 quota/whitelist 判断
+      ├─ 渲染登录成功页
+      └─ runtime_newproc → 启动 async goroutine:
+           └─ CompleteUserLogin_gowrap1  → 异步后续处理
+```
+
+### 3.6 API 端点清单
 
 **来源：** `cosy_remoting_api._ptr_APIPathRegistry.initDefaultPaths` @ `0x140848c60`
 
@@ -406,7 +526,7 @@ func HandleAuthCallback(nonce, auth, tokenString) {
 | `/api/v3/user/grantAuthInfos` | 授权信息 | — |
 | `/api/v3/user/oauth2/deviceToken/poll` | 设备令牌轮询 | — |
 
-### 3.3 完整请求头构造
+### 3.7 完整请求头构造
 
 **函数：** `addBasicHeaders` @ `0x14087ef20` + `addBigModelSignatureHeaders` @ `0x14087e5e0`
 
@@ -431,7 +551,7 @@ headers = {
 }
 ```
 
-### 3.4 MD5 签名算法
+### 3.8 MD5 签名算法
 
 ```python
 COSY_KEY = "d2FyLCB3YXIgbmV2ZXIgY2hhbmdlcw=="          # base64("war, war never changes")
@@ -445,7 +565,7 @@ def md5_sign(encoded_body: str, date_str: str, use_alt_key: bool = False) -> str
 
 **公式：** `MD5(base64(body) + "&" + key + "&" + RFC1123_date)`
 
-### 3.5 认证模式选择
+### 3.9 认证模式选择
 
 **函数：** `buildRequest` @ `0x14087cc20`
 
@@ -632,21 +752,33 @@ POST /algo/api/v3/user/refresh_token
 | `LoginCallback_fm` | `0x141b499c0` | `0x77` | 回调 HTTP handler 包装 |
 | `CreateHttpServer` | `0x141b48d00` | `0x414` | 37510 HTTP 服务器 |
 
-### Phase 2：回调处理 & COSY 凭据获取
+### Phase 2：37510 Callback 处理 & COSY 凭据获取
 
 | 函数 | 地址 | 大小 | 作用 |
 |------|------|------|------|
+| `LoginCallback` | `0x141a133a0` | — | **★ 37510 HTTP `/auth/callback` 入口** |
+| `parseAuthInfo` | `0x141a21660` | — | V1/V2 参数解析路由 |
+| `parseAuthInfoV2` | `0x141a21800` | — | V2: `auth`=`CustomDecryptParts` + `token`=`parseAuthToken` |
+| `CustomDecryptParts` | `0x140455ca0` | — | decodeString + split 解码 |
+| `loginWithUserInfo` | `0x141a10ac0` | — | **★ 登录处理核心**（授权检查 + 配额获取 + 凭据保存） |
+| `loginWithUserInfo.func1` | `0x141a11940` | — | 异步 goroutine（多账号选择超时） |
+| `GetQuotaAndTokenById` | `0x141a16120` | `0x9c0` | **★ 用户配额/状态获取**（ReadQuotaCache / fetchAuthStatus） |
+| `GetGrantAuthInfosWrap` | — | — | 用户组织/授权信息 API |
+| `CompleteUserLogin` | `0x141a12200` | — | **★ 完成登录 + 加密存储 COSY 凭据** |
+| `CompleteUserLogin.gowrap1` | `0x141a12a40` | — | 异步 post-login goroutine |
+| `completeUserLoginWithOrganization` | `0x141a12c00` | — | 组织指定登录完成 |
+| `handleLoginWithMultiAccountInfos` | `0x141a11980` | — | 多账号选择处理 |
+| `loginResultPageWithStep` | `0x141a146c0` | — | HTML 结果页面渲染 |
+| `reportAuthResult` | `0x141a18940` | — | 认证结果上报 |
 | `DeviceLoginHandler` | `0x141aac2a0` | `0x7ad` | LSP `auth/device_login` 处理器 |
 | `DeviceLogin` | `0x141a19ee0` | `0x7ad` | nonce 生成 + ToLoginAuthCallbackParam |
-| `HandleAuthCallback` | `0x141a18dc0` | `0x720` | **回调处理核心：验证 nonce → parseAuth → CompleteLogin** |
+| `HandleAuthCallback` | `0x141a18dc0` | `0x720` | LSP 回调处理（parseAuthInfoV3 + parseAuthToken） |
 | `CompleteLoginWithSelectAccount` | `0x141a0fee0` | `0x600` | 登录完成 + COSY 凭据获取 |
 | `ToLoginAuthCallbackParam` | `0x141a1ce00` | `0x5c0` | auth/token 参数编码（encodeToString + URL 转义） |
-| `parseAuthInfoV3` | `0x141a21b80` | — | Auth 参数解码：URL unescape → decodeString → JSON |
-| `parseAuthToken` | `0x141a213e0` | — | Token 参数解析：URL unescape → decodeString → split |
-| `GetQuotaAndTokenById` | `0x141a16120` | `0x9c0` | 用户数据 + 配额获取（远程 API） |
+| `parseAuthInfoV3` | `0x141a21b80` | — | V3: URL unescape → decodeString → JSON |
+| `parseAuthToken` | `0x141a213e0` | — | Token 参数解析 |
 | `fetchAuthStatusWithUri` | `0x141a1f260` | — | API 状态查询（HTTP POST + Signature 签名） |
-| `CompleteUserLogin` | `0x141a12200` | — | 完成登录 + 加密存储 |
-| `SaveUserInfo` | `0x14088e260` | — | 用户信息保存 |
+| `saveUserInfoAndQuota` | — | — | AES 加密 + 写入 cache/user |
 
 ### 编码 & 加密
 
