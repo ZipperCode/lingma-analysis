@@ -260,19 +260,17 @@ def custom_decrypt_parts(encoded: str, expected_parts: int = 3) -> list:
         decoded = decode_string(encoded)
         text = decoded.decode('utf-8')
         parts = text.split('\n', expected_parts - 1)
-        if len(parts) >= expected_parts:
+        if len(parts) >= 2:
             return parts
     except Exception as e:
         print(f"    [!] decode_string error: {e}")
 
-    # 备用方案: 从解码数据中搜索已知模式
-    print(f"    [*] Trying robust extraction...")
+    # 备用方案: 多块排列尝试 + 模式提取
+    print(f"    [*] Trying robust extraction (4 methods x 15 splits)...")
     try:
-        # 方法1: 尝试不同的块排列
-        for method in ['b1+b2+b0', 'b1+b0+b2', 'b0+b1+b2', 'b0+b2+b1']:
-            extracted = _robust_decode(encoded, method)
-            if extracted and len(extracted) >= expected_parts:
-                return extracted
+        extracted = _robust_decode(encoded)
+        if extracted:
+            return extracted
     except:
         pass
 
@@ -280,7 +278,8 @@ def custom_decrypt_parts(encoded: str, expected_parts: int = 3) -> list:
 
 
 def _robust_decode(encoded: str, method: str = 'b1+b2+b0') -> list:
-    """从编码数据中提取文本模式"""
+    """从编码数据中提取文本模式 — 合并所有 split 的结果"""
+    import re as _re
     body = encoded
     dollar = body.find('$')
     if dollar >= 0:
@@ -293,64 +292,90 @@ def _robust_decode(encoded: str, method: str = 'b1+b2+b0') -> list:
     b2 = rev[:v7]
     b01 = rev[v7:]
 
-    # 尝试不同的 b0/b1 分割
-    for split in range(min(10, len(b01)+1)):
+    all_pt_tokens = []
+    all_rt_tokens = []
+    all_expires = []
+    all_emails = []
+    all_uids = []
+    all_ascii = []
+
+    for split in range(min(15, len(b01)+1)):
         b0 = b01[:split]
         b1 = b01[split:]
 
-        for name, combo in [
-            ("b0+b1+b2", b0 + b1 + b2),
-            ("b1+b0+b2", b1 + b0 + b2),
-            ("b1+b2+b0", b1 + b2 + b0),
-            ("b0+b2+b1", b0 + b2 + b1),
-        ]:
+        combos = {
+            "b0+b1+b2": b0 + b1 + b2,
+            "b1+b0+b2": b1 + b0 + b2,
+            "b1+b2+b0": b1 + b2 + b0,
+            "b0+b2+b1": b0 + b2 + b1,
+        }
+
+        for cname, combo in combos.items():
             try:
                 decoded = _custom_b64_decode(combo)
                 text = decoded.decode('utf-8', errors='replace')
 
-                # 搜索 pt- (token) 或 rt- (refresh) 或 @ (email)
-                parts = []
-                if 'pt-' in text:
-                    pts = [m.start() for m in __import__('re').finditer(r'pt-[A-Za-z0-9]+', text)]
-                    for pos in pts:
-                        end = text.index('\n', pos) if '\n' in text[pos:] else pos + 30
-                        parts.append(text[pos:end])
-                if 'rt-' in text:
-                    rts = [m.start() for m in __import__('re').finditer(r'rt-[A-Za-z0-9]+', text)]
-                    for pos in rts:
-                        end = text.index('\n', pos) if '\n' in text[pos:] else pos + 30
-                        parts.append(text[pos:end])
+                # pt- tokens
+                for m in _re.finditer(r'pt-[A-Za-z0-9]+', text):
+                    if m.group() not in all_pt_tokens:
+                        all_pt_tokens.append(m.group())
+                        print(f"    [pt] {m.group()}")
 
-                # 提取数字 (expire time)
-                nums = __import__('re').findall(r'\b\d{13}\b', text)
-                parts.extend(nums)
+                # rt- tokens
+                for m in _re.finditer(r'rt-[A-Za-z0-9]+', text):
+                    if m.group() not in all_rt_tokens:
+                        all_rt_tokens.append(m.group())
+                        print(f"    [rt] {m.group()}")
 
-                # 提取邮箱
-                emails = __import__('re').findall(r'[\w.]+@[\w.]+', text)
-                parts.extend(emails)
+                # expires (13-digit timestamps)
+                for m in _re.finditer(r'\b\d{13}\b', text):
+                    if m.group() not in all_expires:
+                        all_expires.append(m.group())
+                        print(f"    [exp] {m.group()}")
 
-                if parts:
-                    return parts
+                # emails
+                for m in _re.finditer(r'[\w.]+@[\w.]+', text):
+                    if m.group() not in all_emails:
+                        all_emails.append(m.group())
+                        print(f"    [email] {m.group()}")
 
-                # 提取所有 ASCII 文本段
-                ascii_segments = []
+                # UIDs (16-digit numbers, common for Aliyun)
+                for m in _re.finditer(r'\b\d{16}\b', text):
+                    if m.group() not in all_uids:
+                        all_uids.append(m.group())
+                        print(f"    [uid] {m.group()}")
+
+                # ASCII segments
                 current = ''
                 for byte in decoded:
                     if 32 <= byte < 127:
                         current += chr(byte)
                     else:
-                        if current and len(current) > 3:
-                            ascii_segments.append(current)
+                        if current and len(current) > 6:
+                            all_ascii.append(current)
                         current = ''
-                if current and len(current) > 3:
-                    ascii_segments.append(current)
-
-                if len(ascii_segments) >= expected_parts:
-                    return ascii_segments[:expected_parts]
+                if current and len(current) > 6:
+                    all_ascii.append(current)
 
             except:
                 pass
-    return []
+
+    # 构建返回结果
+    result = []
+    if all_pt_tokens:
+        result.append(all_pt_tokens[0])
+    if all_rt_tokens:
+        result.append(all_rt_tokens[0])
+    if all_expires:
+        result.append(all_expires[0])
+    if all_uids:
+        result.insert(0, all_uids[0])
+    if all_emails:
+        result.append(all_emails[0])
+
+    if result:
+        print(f"    [✓] Extracted: {result}")
+    return result
 
 
 def parse_callback_v2(params: dict) -> dict:
@@ -363,30 +388,19 @@ def parse_callback_v2(params: dict) -> dict:
     if "auth" in params:
         print(f"    [*] Decoding auth param ({len(params['auth'])} chars)...")
         parts = custom_decrypt_parts(params["auth"], 3)
-        if len(parts) >= 3:
+        if parts:
             # 尝试识别: UID, AID, Name
             uids = [p for p in parts if p.isdigit() and len(p) >= 8]
             names = [p for p in parts if '@' in p]
             if uids and names:
                 result.update(uid=uids[0], aid=uids[0] if len(uids) > 1 else uids[0], name=names[0])
+                print(f"    [✓] UID={uids[0][:20]}... Name={names[0][:30]}...")
             elif uids:
                 result.update(uid=uids[0], aid=uids[0])
             elif names:
                 result.update(name=names[0])
-            print(f"    [✓] Auth decoded: UID={result.get('uid', '?')[:20]}... Name={result.get('name', '?')[:30]}...")
         else:
-            print(f"    [!] Auth decode: got {len(parts)} parts, trying raw extraction...")
-            # 直接从原始数据提取
-            raw_text = params.get("auth", "")
-            import re as _re
-            uids = _re.findall(r'\b\d{16}\b', raw_text)
-            emails = _re.findall(r'[\w.]+@[\w.]+', raw_text)
-            if uids:
-                result['uid'] = uids[0]
-            if len(uids) > 1:
-                result['aid'] = uids[1]
-            if emails:
-                result['name'] = emails[0]
+            print(f"    [!] Auth decode failed (got 0 parts)")
     elif "aid" in params and "uid" in params:
         result.update(uid=params["uid"], aid=params["aid"], name=params.get("name", ""))
         print(f"    [✓] V1 params: UID={result['uid'][:20]}...")
