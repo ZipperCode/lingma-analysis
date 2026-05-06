@@ -274,12 +274,27 @@ def encode_to_string(data: bytes) -> str:
 4. 字母表反向替换
 5. 标准 base64 解码
 
-#### Auth 参数构造
+#### Auth 参数构造（V2 vs V3 格式）
 
-**函数：** `ToLoginAuthCallbackParam` @ `0x141a1ce00`
+**V2 格式（HTTP 37510 回调，当前版本）:**
 
 ```python
-def build_auth_string(uid: str, aid: str, name: str) -> str:
+def build_auth_v2(uid: str, aid: str, name: str) -> str:
+    """V2: UID\\nAID\\nName → encodeToString → URL-escape
+       对应 CustomDecryptParts(auth, 3) 解码"""
+    raw = f"{uid}\n{aid}\n{name}"
+    encoded = encode_to_string(raw.encode())
+    return urllib.parse.quote(encoded, safe='')
+```
+
+> V2 的 auth 参数是 `UID\nAID\nName` 三行换行分隔的纯文本，不是 JSON！
+
+**V3 格式（LSP `auth/device_login` 路径，`ToLoginAuthCallbackParam` @ `0x141a1ce00`）:**
+
+```python
+def build_auth_v3(uid: str, aid: str, name: str) -> str:
+    """V3: JSON{UID, AID, Name} → encodeToString → URL-escape
+       对应 parseAuthInfoV3 解码"""
     auth_info = {"UID": uid, "AID": aid, "Name": name}
     auth_json = json.dumps(auth_info, separators=(",", ":"))
     encoded = encode_to_string(auth_json.encode())
@@ -330,10 +345,14 @@ http://127.0.0.1:37510/auth/callback?state=<nonce>&auth=<encoded>&token=<encoded
 | 参数 | 来源 | 解码方式 | 解码后内容 |
 |------|------|----------|-----------|
 | `state` | UUID 去横线（32 字符） | 明文 | PKCE nonce |
-| `auth` | `encodeToString(JSON({UID, AID, Name}))` | `CustomDecryptParts(auth, 3)` | `{UID, AID, Name}` 3 部分 |
-| `token` | `encodeToString(fmt.Sprintf("%s\n%s\n%d", Token, RefreshToken, ExpireTime))` | `parseAuthToken` | `{Token, RefreshToken, ExpireTime}` |
+| `auth` | `encodeToString("UID\\nAID\\nName")` | `CustomDecryptParts(auth, 3)` | `[UID, AID, Name]` 3 部分 |
+| `token` | `encodeToString("Token\\nRefreshToken\\nExpireTime")` | `parseAuthToken` | `[Token, RefreshToken, ExpireTime]` |
 
-> **注意**：V2 版本（当前二进制 `off_146011C70` 版本字节 = `'2'`）直接从 query 参数读取 `auth` 和 `token`，而 V1 版本从 query 参数读取 `aid`、`uid`、`name` 三个独立参数。两种格式均可被 `LoginCallback` 处理器识别。
+> **注意**：V2 版本（当前二进制 `off_146011C70` 版本字节 = `'2'`）直接从 query 参数读取 `auth` 和 `token`，使用 `CustomDecryptParts` + `split("\n")` 解码为 3 部分。
+>
+> V1 版本从 query 参数读取 `aid`、`uid`、`name` 三个独立参数。
+>
+> ⚠️ **重要：V2 回调格式的 auth 参数是 `UID\nAID\nName`（三行换行分隔），不是 JSON 格式！** JSON 格式 (`{UID, AID, Name}`) 仅在 LSP `auth/device_login` 路径的 V3 解析中使用。
 
 ### 3.2 LoginCallback——37510 HTTP 回调入口
 
@@ -377,24 +396,27 @@ func parseAuthInfo(params map[string]string) LoginInfoContext {
     version := *(*byte)off_146011C70  // '2' (ASCII 50)
     
     if version == '1' {
-        // V1: 直接读取 aid, uid, name
+        // V1: 直接从 query 参数读取 aid, uid, name
         aid = params["aid"]
         uid = params["uid"]
         name = params["name"]
         return {Uid: uid, Aid: aid, Name: name}
     } else {
-        // V2: CustomDecryptParts 解码 auth + token
+        // V2: CustomDecryptParts 解码 auth
+        // auth = encodeToString("UID\nAID\nName")  ← NOT JSON!
         authEncoded := params["auth"]
-        parts := CustomDecryptParts(authEncoded, 3) // → [UID, AID, Name]
+        parts := CustomDecryptParts(authEncoded, 3)
+        // decodeString → split("\n", 3) → [UID, AID, Name]
         
-        if time.Now().Unix() < someTimestamp {
-            // 条件不满足时只返回 auth info (byte_14616BD2F)
+        // 检查条件 byte_14616BD2F: 某些条件下只返回 auth info 不解析 token
+        if someCondition {
             return {Uid: parts[0], Aid: parts[1], Name: parts[2]}
         }
         
-        // 完整解码 token
+        // 解码 token (同样 CustomDecryptParts)
         tokenEncoded := params["token"]
-        tokenInfo := parseAuthToken(tokenEncoded) // → [Token, RefreshToken, ExpireTime]
+        tokenInfo := parseAuthToken(tokenEncoded)
+        // decodeString → split("\n") → [Token, RefreshToken, ExpireTime]
         
         return {
             Uid: parts[0], Aid: parts[1], Name: parts[2],

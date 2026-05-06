@@ -178,10 +178,25 @@ def build_headers(body_str: str, machine_id: str, client_type: str = "2",
 # ============================================================
 # Auth/TokenString 编码/解码
 # ============================================================
-def build_auth_string(uid: str, aid: str, name: str) -> str:
+def build_auth_v2(uid: str, aid: str, name: str) -> str:
     """
-    构造 Auth 参数 (IDA @ ToLoginAuthCallbackParam)
+    构造 Auth 参数 (V2, HTTP 37510 回调格式)
+    "UID\\nAID\\nName" → encodeToString → URL-escape
+
+    对应 IDA @ CustomDecryptParts(auth, 3):
+    decodeString + split("\\n", 3) → [UID, AID, Name]
+    """
+    raw = f"{uid}\n{aid}\n{name}"
+    encoded = encode_to_string(raw.encode())
+    return urllib.parse.quote(encoded, safe='')
+
+
+def build_auth_v3(uid: str, aid: str, name: str) -> str:
+    """
+    构造 Auth 参数 (V3, LSP auth/device_login 格式)
     JSON{UID, AID, Name} → encodeToString → URL-escape
+
+    对应 IDA @ ToLoginAuthCallbackParam 0x141a1ce00
     """
     auth_info = {"UID": uid, "AID": aid, "Name": name}
     auth_json = json.dumps(auth_info, ensure_ascii=False, separators=(",", ":"))
@@ -663,9 +678,9 @@ def main():
     print(f"Phase 5: 后端 API 交互")
     print(f"{'='*60}")
 
-    # 5a: 构造 Auth 参数 (IDA @ ToLoginAuthCallbackParam 0x141a1ce00)
-    print(f"\n  [*] 构造 Auth/Token 参数...")
-    auth_encoded = build_auth_string(cb_uid, cb_aid, cb_name)
+    # 5a: 构造 Auth 参数 (V2 格式: UID\\nAID\\nName)
+    print(f"\n  [*] 构造 Auth 参数 (V2)...")
+    auth_encoded = build_auth_v2(cb_uid, cb_aid, cb_name)
     print(f"  Auth ({len(auth_encoded)} chars)")
     if cb_token and cb_refresh:
         expire = int(time.time() * 1000) + 86400000
