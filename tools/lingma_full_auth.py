@@ -156,39 +156,72 @@ def build_sign_headers(body: str, machine_id: str, client_type: str = "2",
 
 
 # ============================================================
-# API 调用 —— 完整模拟 Lingma 的请求构造
+# API 调用 —— 完整模拟 buildRequest
 # ============================================================
+def build_basic_headers(machine_id: str, client_type: str = "2", cosy_version: str = "20") -> dict:
+    """基础请求头 (IDA @ addBasicHeaders 0x14087ef20)"""
+    return {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "Accept-Encoding": "gzip",
+        "User-Agent": f"Cosy/{cosy_version}",
+        "X-Forwarded-For": "127.0.0.1",
+        "Cosy-MachineId": machine_id,
+        "Cosy-MachineToken": "",
+        "Cosy-MachineType": "",
+        "Cosy-MachineCode": "",
+        "Cosy-MachineOS": "x86_64_windows",
+        "Cosy-ClientType": client_type,
+        "Cosy-Version": cosy_version,
+    }
+
+
 def api_call(method: str, path: str, body_json: dict,
-             machine_id: str, encode_version: str = "") -> tuple:
+             machine_id: str, encode_version: str = "",
+             magic: str = "none") -> tuple:
     """
     通用 API 调用，完整模拟 buildRequest 流程
 
-    encode_version:
-      ""   → 原始 JSON body (用于 doRefreshToken)
-      "1"  → Encode=1 编码 body (用于 /api/v3/user/status)
+    参数:
+      encode_version: ""=原始JSON, "1"=Encode=1编码
+      magic: 认证模式 — "none"(签名), "http"(Bearer), "sign"(仅基础头)
     """
     body_str = json.dumps(body_json, ensure_ascii=False, separators=(",", ":"))
 
-    # Step 1: encodeRequestBody — 如果是 dict 则 JSON marshal
-    # (body_str 已经是 JSON 字符串，转换为 bytes)
+    # Step 1: encodeRequestBody — JSON marshal to bytes
     body_bytes = body_str.encode('utf-8')
 
-    # Step 2: shouldEncryptBody — 检查是否需要 encodeToString
-    # 逻辑: EncodeVersion="1" + 方法=POST + 路径不在跳过列表 → 需要编码
+    # Step 2: shouldEncryptBody — EncodeVersion="1" + POST → encode
     if encode_version == "1":
-        # Encode=1 编码 body (IDA @ shouldAddEncodeParam)
         encoded_body = encode_to_string(body_bytes)
         final_body = encoded_body.encode('utf-8')
     else:
         final_body = body_bytes
 
-    # Step 3: 构建签名头
+    # Step 3: 构建 URL 和头
     url = f"{BIG_MODEL_ENDPOINT}{path}"
     date_str = get_rfc1123_date()
-    headers = build_sign_headers(body_str, machine_id, date_str=date_str)
+
+    # Step 4: 根据 magic 选择认证头
+    headers = build_basic_headers(machine_id)
+
+    if magic == "none":
+        # Signature 模式 (refresh_token)
+        encoded = base64.b64encode(body_str.encode()).decode()
+        headers.update({
+            "Date": date_str,
+            "Cosy-Date": date_str,
+            "Cosy-User": encoded,
+            "Signature": md5_sign(encoded, date_str),
+        })
+    elif magic == "http":
+        # Bearer 模式 (Chat API) — 需要 Authorization 头
+        pass  # 后续实现
+    # magic == "sign": 仅基础头，不加额外头
+
     headers["Content-Length"] = str(len(final_body))
 
-    # Step 4: 发送请求
+    # Step 5: 发送请求
     req = urllib.request.Request(
         url, data=final_body, headers=headers, method=method
     )
@@ -655,7 +688,7 @@ def main():
     }
     status_code, status_resp = api_call(
         "POST", "/api/v3/user/status", status_body,
-        machine_id, encode_version="1"
+        machine_id, encode_version="1", magic="sign"
     )
     print(f"  HTTP {status_code}")
     if status_code == 200:
