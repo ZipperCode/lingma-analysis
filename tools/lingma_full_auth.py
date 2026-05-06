@@ -40,6 +40,14 @@ import webbrowser
 from datetime import datetime, timezone
 from pathlib import Path
 
+# 尝试使用 requests 库（不同 TLS 指纹）
+try:
+    import requests as req_lib
+    HAS_REQUESTS = True
+except ImportError:
+    req_lib = None
+    HAS_REQUESTS = False
+
 # ============================================================
 # 常量
 # ============================================================
@@ -224,22 +232,32 @@ def api_call(method: str, path: str, body_json: dict,
 
     headers["Content-Length"] = str(len(final_body))
 
-    # Step 5: 发送请求
-    req = urllib.request.Request(
-        url, data=final_body, headers=headers, method=method
-    )
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
-
-    try:
-        resp = urllib.request.urlopen(req, context=ctx, timeout=30)
-        return resp.status, json.loads(resp.read().decode())
-    except urllib.error.HTTPError as e:
-        err_body = e.read().decode(errors="replace")
-        return e.code, {"error": str(e), "body": err_body[:500]}
-    except Exception as e:
-        return 0, {"error": str(e)}
+    # Step 5: 发送请求 — 优先用 requests（TLS 指纹更接近浏览器/Go）
+    if HAS_REQUESTS:
+        try:
+            resp = req_lib.request(method, url, data=final_body, headers=headers,
+                                   timeout=30, verify=False)
+            return resp.status_code, resp.json() if resp.text else {}
+        except req_lib.exceptions.HTTPError as e:
+            err_body = e.response.text if e.response else str(e)
+            return e.response.status_code if e.response else 0, {"error": str(e), "body": err_body[:500]}
+        except Exception as e:
+            return 0, {"error": str(e)}
+    else:
+        req = urllib.request.Request(
+            url, data=final_body, headers=headers, method=method
+        )
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        try:
+            resp = urllib.request.urlopen(req, context=ctx, timeout=30)
+            return resp.status, json.loads(resp.read().decode())
+        except urllib.error.HTTPError as e:
+            err_body = e.read().decode(errors="replace")
+            return e.code, {"error": str(e), "body": err_body[:500]}
+        except Exception as e:
+            return 0, {"error": str(e)}
 
 
 # ============================================================
@@ -622,7 +640,17 @@ def main():
     parser.add_argument("--machine-id", help="Machine ID (自动生成)")
     args = parser.parse_args()
 
-    port, machine_id = args.port, args.machine_id or str(uuid.uuid4())
+    port, machine_id = args.port, args.machine_id
+
+    # 使用持久化 Machine ID (从 Lingma cache/id 读取)
+    if not machine_id:
+        id_path = Path.home() / ".lingma" / "cache" / "id"
+        if id_path.exists():
+            machine_id = id_path.read_text().strip()
+            print(f"[*] 使用持久 Machine ID (来自 {id_path})")
+        else:
+            machine_id = str(uuid.uuid4())
+    print(f"[*] Machine ID: {machine_id}")
 
     print("=" * 60)
     print("Lingma 完整认证模拟 v4.0")
