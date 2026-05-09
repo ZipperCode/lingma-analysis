@@ -417,14 +417,14 @@
 
 - `Lingma.exe status -o json --workDir C:\Users\Zipper\.lingma` 当前返回：
   - `logged_in = true`
-  - `username = zhang640@blny.de`
+  - `username = <REDACTED>`
   - `user_type = personal_standard`
 - 直接通过 `37010` 查询：
   - `auth/status.status = 2`
-  - `id/accountId = 5930676910898027`
-  - `token = pt-5zmkcs3cUpPGP8FGb88WGkSJ`
-  - `refreshToken = rt-gHWjpgS9NQ4TOhmtvmN55ELZ`
-  - `expireTime = 1782107060847`
+  - `id/accountId = <REDACTED>`
+  - `token = pt-<REDACTED>`
+  - `refreshToken = rt-<REDACTED>`
+  - `expireTime = <REDACTED>`
 - `config/queryModels` 当前也已返回完整模型注册表，不再是空结果。
 
 这说明：
@@ -1446,7 +1446,7 @@
   - `pong`
   - `Reply with exactly`
   - `601e8990a5db44b4ba94aff7192cf64a`
-  - `5930676910898027`
+  - `<REDACTED_user_id>`
 - `$` 只在少量 body 内部出现，且不是末尾 padding：
   - 例如第二条聊天 body 里只出现 1 次
   - 第三条聊天 body 里连续出现 2 次，但位置在中部，不在结尾
@@ -2055,11 +2055,11 @@ PowerShell 独立复算结果也已命中：
 
 则本地 `auth/status` 可直接读回：
 
-- `id = 5930676910898027`
-- `token = pt-5zmkcs3cUpPGP8FGb88WGkSJ`
-- `refreshToken = rt-gHWjpgS9NQ4TOhmtvmN55ELZ`
+- `id = <REDACTED>`
+- `token = pt-<REDACTED>`
+- `refreshToken = rt-<REDACTED>`
 
-这说明对于后续所有“隔离实例 + 动态 插桩观察 + 带登录态复现”场景，当前更稳的做法应该是：
+这说明对于后续所有”隔离实例 + 动态 插桩观察 + 带登录态复现”场景，当前更稳的做法应该是：
 
 - 不要依赖 `--copyDataDir` 迁移用户态
 - 直接克隆一个已落地过 `cache/user` 的 workdir 再启动
@@ -2090,7 +2090,7 @@ PowerShell 独立复算结果也已命中：
 
 - `auth/status`
   - `status = 2`
-  - `name = zhang640@blny.de`
+  - `name = <REDACTED>`
   - `whitelist = 3`
   - `privacyPolicyAgreed = true`
 - `config/queryModels`

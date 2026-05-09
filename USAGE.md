@@ -149,5 +149,5 @@ _doRTgHZBKcGVjlvpC,@aFSx#DPuNJme&i*MzLOEn)sUrthbf%Y^w.(kIQyXqWA!
 | [docs/lingma-analysis-overview.md](docs/lingma-analysis-overview.md) | 当前结论总览 |
 | [docs/lingma-analysis-final-status.md](docs/lingma-analysis-final-status.md) | 最新状态总结 |
 | [docs/remote-api-direct-connection.md](docs/remote-api-direct-connection.md) | 远端直连现状 |
-| [docs/topics/encoding-alphabet-decoded.md](docs/topics/encoding-alphabet-decoded.md) | 编码字母表解析详情 |
-| [docs/topics/heartbeat-body-structure.md](docs/topics/heartbeat-body-structure.md) | Heartbeat body 结构 |
+| [docs/topics/encode1-complete-analysis.md](docs/topics/encode1-complete-analysis.md) | 编码字母表解析详情 |
+| [docs/topics/heartbeat-body-structure.md](docs/doubt/heartbeat-body-structure.md) | Heartbeat body 结构（未验证） |

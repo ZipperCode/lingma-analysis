@@ -497,12 +497,12 @@
 
 - `Lingma.exe status -o json --workDir C:\Users\Zipper\.lingma` 当前返回：
   - `logged_in = true`
-  - `username = zhang640@blny.de`
+  - `username = <REDACTED>`
 - 本地 `37010` 的 `auth/status` 当前直接返回：
   - `status = 2`
-  - `id = 5930676910898027`
-  - `token = pt-5zmkcs3cUpPGP8FGb88WGkSJ`
-  - `refreshToken = rt-gHWjpgS9NQ4TOhmtvmN55ELZ`
+  - `id = <REDACTED>`
+  - `token = pt-<REDACTED>`
+  - `refreshToken = rt-<REDACTED>`
   - `userType = personal_standard`
   - `whitelist = 3`
   - `cloudType = cloud`

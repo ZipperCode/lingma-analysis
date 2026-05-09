@@ -1,5 +1,10 @@
 # IDA HTTP Authorization Header 完全破解
 
+> **⚠️ WARNING: 未验证结论**
+> 以下 payload 字段名和签名参数顺序是 IDA 静态分析的结果，**从未被 Frida 运行时捕获验证**。
+> 项目中存在两套互相矛盾的版本（本文件 vs endpoint-auth.md），**两套均未验证**。
+> 详见 `docs/doubt/CONTRADICTIONS.md` 矛盾 #2 和 #3。
+
 ## 核心发现
 
 通过IDA Pro MCP静态分析，完全破解了Lingma的Authorization header构造方式，发现了关键错误：

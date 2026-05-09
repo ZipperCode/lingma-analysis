@@ -1,7 +1,0 @@
-Traceback (most recent call last):
-  File "D:\Project\lingma\tools\frida_hook_pipe_v3.py", line 207, in main
-    resp = read_response(handle)
-  File "D:\Project\lingma\tools\frida_hook_pipe_v3.py", line 135, in read_response
-    text = data.decode('utf-8', errors='replace')
-           ^^^^^^^^^^^
-AttributeError: 'memoryview' object has no attribute 'decode'

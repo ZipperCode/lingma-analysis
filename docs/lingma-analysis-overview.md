@@ -146,18 +146,24 @@
 ### 3. 最后再看专项细节
 
 - [topics/encode1-complete-analysis.md](./topics/encode1-complete-analysis.md)
-- [topics/encoding-alphabet-decoded.md](./topics/encoding-alphabet-decoded.md)
-- [topics/encryption-analysis.md](./topics/encryption-analysis.md)
-- [topics/heartbeat-body-structure.md](./topics/heartbeat-body-structure.md)
+- [topics/encode1-complete-analysis.md](./topics/encode1-complete-analysis.md)
 
-### 4. 如果目标是继续做完全独立化
+### 4. 未验证推测区
 
-这部分请明确它属于“下游设计与后续工程”，不要和当前仓库已落地实现混读：
+以下专项分析的结论未经 Frida 运行时验证，已移至怀疑区：
 
-- [topics/client-id-extraction.md](./topics/client-id-extraction.md)
+- [doubt/encryption-analysis.md](./doubt/encryption-analysis.md) — 心跳 AES 假设（已被否定）
+- [doubt/heartbeat-body-structure.md](./doubt/heartbeat-body-structure.md) — 心跳体截断问题
+- [doubt/CONTRADICTIONS.md](./doubt/CONTRADICTIONS.md) — 跨文档矛盾注册表
+
+### 5. 如果目标是继续做完全独立化
+
+这部分请明确它属于”下游设计与后续工程”，不要和当前仓库已落地实现混读：
+
 - [topics/session-key-analysis.md](./topics/session-key-analysis.md)
-- [topics/refresh-token-flow.md](./topics/refresh-token-flow.md)
-- [topics/standalone-oauth-analysis.md](./topics/standalone-oauth-analysis.md)
+- [doubt/client-id-extraction.md](./doubt/client-id-extraction.md) — client_id 提取失败
+- [doubt/refresh-token-flow.md](./doubt/refresh-token-flow.md) — 依赖未验证的 OAuth 链路
+- [doubt/standalone-oauth-analysis.md](./doubt/standalone-oauth-analysis.md) — v3 端点分析
 - [superpowers/specs/](./superpowers/specs/)
 
 ## 当前最稳的工程建议

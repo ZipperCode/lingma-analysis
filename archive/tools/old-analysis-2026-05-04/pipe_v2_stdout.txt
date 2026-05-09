@@ -1,0 +1,56 @@
+Starting Lingma...
+PID: 27476
+Pipe: \\.\pipe\lingma-866125
+[Hook] WSASend OK
+[Hook] send OK
+[Hook] connect OK
+[Hook] All ready
+
+Connecting via named pipe...
+Connected to pipe!
+
+=== Method 1: JSON-RPC + newline ===
+
+[init] Sending 158 bytes...
+[init] Response: <memory at 0x0000017FBF86C580>
+
+[ide/update] Sending 73 bytes...
+[ide/update] Response: <memory at 0x0000017FBF86C280>
+
+[chat/send] Sending 97 bytes...
+[chat/send] Response: <memory at 0x0000017FBF86C280>
+
+[extension/sendRequest] Sending 130 bytes...
+[extension/sendRequest] Response: <memory at 0x0000017FBF86C280>
+
+[initialize] Sending 117 bytes...
+[initialize] Response: <memory at 0x0000017FBF86C280>
+[WSASend] len=24 (hex preview):
+           0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F  0123456789ABCDEF
+00000000  17 03 03 00 13 3a c6 8f 95 fb 89 20 2a d2 1e 34  .....:..... *..4
+00000010  bd 23 bf 1e 13 b4 6d 22                          .#....m"
+
+=== Method 2: Content-Length header ===
+
+[lsp] Sending 139 bytes...
+[lsp] Error: (109, 'ReadFile', '管道已结束。')
+
+=== Method 3: Various notifications ===
+
+[$/cancelRequest] Sending 69 bytes...
+[$/cancelRequest] Error: (232, 'WriteFile', '管道正在被关闭。')
+
+[initialized] Sending 58 bytes...
+[initialized] Error: (232, 'WriteFile', '管道正在被关闭。')
+
+[textDocument/didOpen] Sending 191 bytes...
+[textDocument/didOpen] Error: (232, 'WriteFile', '管道正在被关闭。')
+
+Waiting 30s for any triggered traffic...
+  0s elapsed
+  5s elapsed
+  10s elapsed
+  15s elapsed
+  20s elapsed
+  25s elapsed
+--- Done ---

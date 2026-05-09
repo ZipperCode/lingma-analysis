@@ -116,7 +116,7 @@
 
 - [topics/encode1-complete-analysis.md](./topics/encode1-complete-analysis.md)
 - [topics/session-key-analysis.md](./topics/session-key-analysis.md)
-- [topics/standalone-oauth-analysis.md](./topics/standalone-oauth-analysis.md)
+- [doubt/standalone-oauth-analysis.md](./doubt/standalone-oauth-analysis.md) — 未验证
 
 ## 文件清单
 

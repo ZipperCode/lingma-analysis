@@ -1,0 +1,13 @@
+Starting Lingma...
+PID: 16872
+Pipe: \\.\pipe\lingma-41f6af
+[Hook] WSASend OK
+[Hook] Ready
+
+Connecting via named pipe...
+Connected to pipe!
+Sent initialize
+Pipe error: (109, 'ReadFile', '管道已结束。')
+
+Waiting 30s...
+--- Done ---
