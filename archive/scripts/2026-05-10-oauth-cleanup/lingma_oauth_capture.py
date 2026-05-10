@@ -37,7 +37,50 @@ import webbrowser
 from pathlib import Path
 
 
-# ===== PKCE 工具 =====
+# ===== 从 HTML 中提取认证信息 =====
+
+def extract_auth_from_html(html: str) -> dict:
+    """
+    从 HTML 中解析 window.user_info 获取认证信息
+
+    支持多种格式：
+    - window.user_info = '{"aid":"..."}' (JSON 字符串，单引号)
+    - window.user_info = "{...}" (JSON 字符串，双引号)
+    - window.user_info = {...} (JSON 对象)
+    """
+    # 模式 1: window.user_info = '...' (单引号)
+    pattern = r"window\.user_info\s*=\s*'(.+?)'\s*;"
+    match = re.search(pattern, html, re.DOTALL)
+    if match:
+        json_str = match.group(1)
+        json_str = json_str.replace("\\'", "'").replace('\\"', '"').replace("\\\\", "\\")
+        try:
+            return json.loads(json_str)
+        except json.JSONDecodeError:
+            pass
+
+    # 模式 2: window.user_info = "..." (双引号)
+    pattern = r'window\.user_info\s*=\s*"(.+?)"\s*;'
+    match = re.search(pattern, html, re.DOTALL)
+    if match:
+        json_str = match.group(1)
+        json_str = json_str.replace('\\"', '"').replace("\\\\", "\\")
+        try:
+            return json.loads(json_str)
+        except json.JSONDecodeError:
+            pass
+
+    # 模式 3: window.user_info = {...} (JSON 对象，无引号)
+    pattern = r'window\.user_info\s*=\s*({.+?})\s*;'
+    match = re.search(pattern, html, re.DOTALL)
+    if match:
+        json_str = match.group(1)
+        try:
+            return json.loads(json_str)
+        except json.JSONDecodeError:
+            pass
+
+    return {}
 
 def generate_pkce() -> tuple:
     """生成 PKCE 参数: (code_verifier, code_challenge)"""
@@ -257,12 +300,13 @@ class OAuthCallbackHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
         params = urllib.parse.parse_qs(parsed.query)
+        flat = {k: v[0] if len(v) == 1 else v for k, v in params.items()}
 
         # 保存回调数据
         OAuthCallbackHandler.captured = {
             'method': 'GET',
             'path': self.path,
-            'query_params': {k: v[0] if len(v) == 1 else v for k, v in params.items()},
+            'query_params': flat,
             'headers': dict(self.headers),
             'client_address': self.client_address,
             'timestamp': time.time(),
@@ -273,6 +317,8 @@ class OAuthCallbackHandler(http.server.BaseHTTPRequestHandler):
         state = params.get('state', [None])[0]
         error = params.get('error', [None])[0]
         nonce = params.get('nonce', [None])[0]
+        auth_param = params.get('auth', [None])[0]
+        token_param = params.get('token', [None])[0]
 
         print(f'\n{"="*60}')
         print(f'[*] 收到 OAuth 回调喵~ φ(≧ω≦*)♪')
@@ -284,10 +330,14 @@ class OAuthCallbackHandler(http.server.BaseHTTPRequestHandler):
         print(f'  State:     {state}')
         print(f'  Nonce:     {nonce}')
         print(f'  Error:     {error}')
+        if auth_param:
+            print(f'  Auth:      {auth_param[:50]}...')
+        if token_param:
+            print(f'  Token:     {token_param[:50]}...')
 
         # 打印其他参数
         for k, v in OAuthCallbackHandler.captured['query_params'].items():
-            if k not in ('code', 'state', 'error', 'nonce'):
+            if k not in ('code', 'state', 'error', 'nonce', 'auth', 'token'):
                 print(f'  {k}:  {str(v)[:100]}')
 
         if code:
@@ -301,25 +351,62 @@ class OAuthCallbackHandler(http.server.BaseHTTPRequestHandler):
             </body></html>
             '''
             self.wfile.write(response_html.encode('utf-8'))
+        elif auth_param or token_param:
+            # URL 参数中包含 auth/token，保存认证信息
+            auth_data = {}
+            if auth_param:
+                auth_data['auth'] = auth_param
+            if token_param:
+                auth_data['token'] = token_param
+            for k in ('aid', 'uid', 'name', 'state'):
+                if k in flat:
+                    auth_data[k] = flat[k]
+            OAuthCallbackHandler.captured['auth_data'] = auth_data
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/html; charset=utf-8')
+            self.end_headers()
+            self.wfile.write(b'<h1>Auth data captured</h1>')
         elif error:
             self.send_response(400)
             self.send_header('Content-Type', 'text/html; charset=utf-8')
             self.end_headers()
             self.wfile.write(f'<h1>OAuth 错误: {error}</h1>'.encode('utf-8'))
         else:
+            # 没有认证信息，返回 HTML 页面用于捕获
             self.send_response(200)
             self.send_header('Content-Type', 'text/html; charset=utf-8')
             self.end_headers()
-            self.wfile.write(b'<h1>Waiting for authentication...</h1>')
+            capture_html = '''<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><title>Lingma OAuth</title></head>
+<body style="font-family: system-ui; padding: 40px; text-align: center;">
+<h1 style="color: #4CAF50;">OAuth 回调已收到</h1>
+<p>等待认证信息...</p>
+<script>
+(function() {
+    if (window.user_info) {
+        fetch('/capture', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({user_info: window.user_info})
+        });
+    }
+})();
+</script>
+</body>
+</html>'''
+            self.wfile.write(capture_html.encode('utf-8'))
 
     def do_POST(self):
         content_length = int(self.headers.get('Content-Length', 0))
         body = self.rfile.read(content_length) if content_length else b''
 
+        body_str = body.decode('utf-8', errors='replace')
+
         OAuthCallbackHandler.captured = {
             'method': 'POST',
             'path': self.path,
-            'body': body.decode('utf-8', errors='replace'),
+            'body': body_str,
             'body_hex': body.hex(),
             'headers': dict(self.headers),
             'client_address': self.client_address,
@@ -331,7 +418,22 @@ class OAuthCallbackHandler(http.server.BaseHTTPRequestHandler):
         print(f'  Path:      {self.path}')
         print(f'  Body len:  {len(body)}')
         if len(body) < 2000:
-            print(f'  Body:      {body.decode("utf-8", errors="replace")}')
+            print(f'  Body:      {body_str}')
+
+        # 尝试从 POST 请求体中解析认证信息
+        auth_data = {}
+        try:
+            data = json.loads(body_str)
+            if 'user_info' in data:
+                auth_data = data['user_info']
+            else:
+                auth_data = data
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            pass
+
+        if auth_data:
+            OAuthCallbackHandler.captured['auth_data'] = auth_data
+            print(f'  [✓] Auth data extracted from POST body')
 
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')

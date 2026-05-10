@@ -1,0 +1,9 @@
+{
+  "nonce": "3fefe4b9a9cd4624850c63be55b6251c",
+  "verifier": "AHqoMThxsxFFdRj4o_YjV80YGidsfaWfgi-PjAsfA1Q",
+  "challenge": "877ENm6fGvDcFCnons4zpcMR78n-pDKWGtVsAB6A2Rs",
+  "machine_id": "35346164-3866-492d-a339-30773a32652d",
+  "port": 37510,
+  "login_url": "https://account.alibabacloud.com/login/login.htm?oauth_callback=https%3A%2F%2Flingma.alibabacloud.com%2Flingma%2Flogin%3Fnonce%3D3fefe4b9a9cd4624850c63be55b6251c%26port%3D37510%26state%3D2-3fefe4b9a9cd4624850c63be55b6251c%26challenge%3D877ENm6fGvDcFCnons4zpcMR78n-pDKWGtVsAB6A2Rs%26challenge_method%3DS256%26machine_id%3D35346164-3866-492d-a339-30773a32652d",
+  "inner_url": "https://lingma.alibabacloud.com/lingma/login?nonce=3fefe4b9a9cd4624850c63be55b6251c&port=37510&state=2-3fefe4b9a9cd4624850c63be55b6251c&challenge=877ENm6fGvDcFCnons4zpcMR78n-pDKWGtVsAB6A2Rs&challenge_method=S256&machine_id=35346164-3866-492d-a339-30773a32652d"
+}

@@ -4,5 +4,6 @@
       "Bash(mkdir -p /c/Users/Zipper/.claude/plans)",
       "Read(//c/Users/Zipper/.claude/plans//**)"
     ]
-  }
+  },
+  "prefersReducedMotion": false
 }
