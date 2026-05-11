@@ -124,7 +124,7 @@ class LingmaRemoteAPI:
         self._machine_id = machine_id
 
     def _read_credentials(self):
-        """按优先级加载凭据: 直接传入 > 环境变量 > 配置文件 > 本地缓存"""
+        """按优先级加载凭据: 直接传入 > 环境变量 > 本地缓存 > 配置文件"""
         if self._cosy_key is not None and self._encrypt_user_info is not None:
             return  # 已有凭据
 
@@ -137,7 +137,30 @@ class LingmaRemoteAPI:
             self._machine_id = os.environ.get('LINGMA_MACHINE_ID', '')
             return
 
-        # 2. 便携配置文件
+        # 2. 本地 Lingma 缓存 (最可靠，Lingma 客户端实时写入)
+        try:
+            cache_id = self.lingma_dir / 'cache' / 'id'
+            cache_user = self.lingma_dir / 'cache' / 'user'
+            if cache_id.exists() and cache_user.exists():
+                with open(cache_id, 'r') as f:
+                    self._machine_id = f.read().strip()
+                with open(cache_user, 'rb') as f:
+                    encrypted = base64.b64decode(f.read().strip())
+
+                key = self._machine_id[:16].encode('utf-8')
+                cipher = Cipher(algorithms.AES(key), modes.CBC(key))
+                dec = cipher.decryptor()
+                decrypted = dec.update(encrypted) + dec.finalize()
+                decrypted = decrypted[:-decrypted[-1]]
+                user_data = json.loads(decrypted.decode('utf-8'))
+                self._cosy_key = user_data['key']
+                self._encrypt_user_info = user_data['encrypt_user_info']
+                self._user_id = str(user_data['uid'])
+                return
+        except Exception:
+            pass
+
+        # 3. 便携配置文件 (fallback，可能过期)
         config_path = self._config_file or (self.lingma_dir / 'portable_config.json')
         if isinstance(config_path, str):
             config_path = Path(config_path)
@@ -148,23 +171,6 @@ class LingmaRemoteAPI:
             self._encrypt_user_info = cfg['encrypt_user_info']
             self._user_id = cfg.get('user_id', '')
             self._machine_id = cfg.get('machine_id', '')
-            return
-
-        # 3. 本地 Lingma 缓存 (需要安装 Lingma)
-        with open(self.lingma_dir / 'cache' / 'id', 'r') as f:
-            self._machine_id = f.read().strip()
-        with open(self.lingma_dir / 'cache' / 'user', 'rb') as f:
-            encrypted = base64.b64decode(f.read().strip())
-
-        key = self._machine_id[:16].encode('utf-8')
-        cipher = Cipher(algorithms.AES(key), modes.CBC(key))
-        dec = cipher.decryptor()
-        decrypted = dec.update(encrypted) + dec.finalize()
-        decrypted = decrypted[:-decrypted[-1]]
-        user_data = json.loads(decrypted.decode('utf-8'))
-        self._cosy_key = user_data['key']
-        self._encrypt_user_info = user_data['encrypt_user_info']
-        self._user_id = user_data['uid']
 
     def _make_bearer(self, path: str, body: str = '', date: str = None):
         """生成 COSY Bearer token
@@ -177,7 +183,10 @@ class LingmaRemoteAPI:
         if date is None:
             date = str(int(time.time()))
 
-        normalized = path[5:] if path.startswith('/algo/') else path
+        # trimQueryPath (IDA: 0x14087eb00): strip query → strip prefixes
+        sig_path = path.split('?')[0]          # 1. strip query string
+        if sig_path.startswith('/algo'):       # 2. strip "/algo" prefix (unk_1424ADCF6)
+            sig_path = sig_path[5:]
 
         payload_obj = {
             'cosyVersion': '2.11.2',
@@ -191,39 +200,52 @@ class LingmaRemoteAPI:
         ).decode()
 
         slot4 = body if body else ''
-        preimage = f'{payload_b64}\n{self._cosy_key}\n{date}\n{slot4}\n{normalized}'
+        preimage = f'{payload_b64}\n{self._cosy_key}\n{date}\n{slot4}\n{sig_path}'
         sig = hashlib.md5(preimage.encode()).hexdigest()
 
-        return f'COSY.{payload_b64}.{sig}', date
+        return f'COSY.{payload_b64}.{sig}', date, sig_path
 
     def _make_headers(self, path: str, body: str = '', date: str = None):
-        """生成请求头"""
+        """生成请求头（匹配 IDA 逆向的 AuthToken 函数）"""
         self._read_credentials()
-        bearer, date = self._make_bearer(path, body, date)
+        bearer, date, sig_path = self._make_bearer(path, body, date)
 
+        body_hash = hashlib.md5(body.encode()).hexdigest() if body else hashlib.md5(b'').hexdigest()
+        body_length = str(len(body.encode())) if body else '0'
+
+        # addBasicHeaders (IDA: 0x14087ef20) — 发送在 AuthToken headers 之前
         headers = {
-            'Authorization': f'Bearer {bearer}',
             'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'Accept-Encoding': 'gzip',
+            'Cosy-Version': '2.11.2',
+            'Cosy-ClientIp': '',
+            'Cosy-MachineId': self._machine_id,
+            'Cosy-MachineToken': '',
+            'Cosy-MachineType': '',
+            'Cosy-MachineCode': '',
+            'Cosy-MachineOS': 'x86_64_windows',
+            'Cosy-ClientType': '2',
+        }
+
+        # AuthToken (IDA: 0x14088b740) — Bearer + COSY 签名头
+        headers.update({
+            'Authorization': f'Bearer {bearer}',
             'Appcode': 'cosy',
             'Cosy-Date': date,
             'Cosy-Key': self._cosy_key,
-            'Cosy-Machineid': self._machine_id,
             'Cosy-User': self._user_id,
-            'Cosy-Clientip': '198.18.0.1',
-            'Cosy-Clienttype': '2',
-            'Cosy-Machineos': 'x86_64_windows',
-            'Cosy-Machinetoken': '',
-            'Cosy-Machinetype': '',
-            'Cosy-Version': '2.11.2',
-            'Login-Version': 'v2',
-            'User-Agent': 'Go-http-client/1.1',
-        }
+            'Cosy-BodyHash': body_hash,
+            'Cosy-BodyLength': body_length,
+            'Cosy-SigPath': sig_path,
+            'Cosy-Data-Policy': 'AGREE',
+            'Cosy-Organization-Tags': '',
+            'Cosy-Organization-Id': '',
+        })
 
         if body:
             headers['Cache-Control'] = 'no-cache'
             headers['Accept'] = 'text/event-stream'
-        else:
-            headers['Accept'] = 'application/json'
 
         return headers
 
@@ -312,7 +334,7 @@ class LingmaRemoteAPI:
                                      task_id=task_id, model=model)
         headers = self._make_headers(path, body)
 
-        cmd = ['curl', '-s', '--max-time', str(timeout)]
+        cmd = ['curl', '-s', '--compressed', '--max-time', str(timeout)]
         for k, v in headers.items():
             cmd.extend(['-H', f'{k}: {v}'])
         cmd.extend(['-d', body, f'{self.BASE_URL}{full_path}'])
@@ -345,7 +367,7 @@ class LingmaRemoteAPI:
         path = self.MODEL_LIST_PATH
         headers = self._make_headers(path)
 
-        cmd = ['curl', '-s', '--max-time', '30']
+        cmd = ['curl', '-s', '--compressed', '--max-time', '30']
         for k, v in headers.items():
             cmd.extend(['-H', f'{k}: {v}'])
         cmd.append(f'{self.BASE_URL}{path}')

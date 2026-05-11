@@ -588,8 +588,90 @@ def cmd_login(args):
     save_credentials(creds)
 
 
+def _pkcs7_pad(data: bytes, block_size: int = 16) -> bytes:
+    pad_len = block_size - (len(data) % block_size)
+    return data + bytes([pad_len] * pad_len)
+
+
+# Embedded RSA public key (IDA @ 0x1425bd8e8, 1024-bit PKIX)
+_RSA_PUBKEY_PEM = """\
+-----BEGIN PUBLIC KEY-----
+MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDA8iMH5c02LilrsERw9t6Pv5Nc
+4k6Pz1EaDicBMpdpxKduSZu5OANqUq8er4GM95omAGIOPoH+Nx0spthYA2BqGz+l
+6HRkPJ7S236FZz73In/KVuLnwI8JJ2CbuJap8kvheCCZpmAWpb/cPx/3Vr/J6I17
+XcW+ML9FoCI6AOvOzwIDAQAB
+-----END PUBLIC KEY-----"""
+
+
+def generate_cosy_credentials(creds: dict) -> tuple:
+    """
+    本地生成 cosy_key + encrypt_user_info (IDA @ SaveUserInfo 0x14088e260).
+
+    流程: userInfo JSON → AES-128-CBC(randomKey) → encrypt_user_info
+          randomKey → RSA-PKCS1v15(embeddedPubKey) → Base64 → cosy_key
+    """
+    from cryptography.hazmat.primitives.asymmetric import padding as asym_padding
+    from cryptography.hazmat.primitives.serialization import load_pem_public_key
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+
+    # CosyUserInfo inner fields (Go struct JSON tags, verified from cache)
+    inner_info = {
+        "name": creds.get("name", ""),
+        "aid": creds.get("aid", creds.get("uid", "")),
+        "uid": creds.get("uid", ""),
+        "yx_uid": "",
+        "organization_id": "",
+        "organization_name": "",
+        "staffId": "",
+        "avatar_url": "",
+        "key": "",
+        "encrypt_user_info": "",
+        "user_source_channel": "",
+        "security_oauth_token": creds.get("security_oauth_token", ""),
+        "refresh_token": creds.get("refresh_token", ""),
+        "expire_time": 0,
+        "user_type": "",
+        "data_policy_agreed": False,
+        "email": "",
+        "is_data_policy_modifiable": False,
+        "is_quota_exceeded": False,
+        "organization_tags": None,
+    }
+    user_json = json.dumps(inner_info, separators=(",", ":"), ensure_ascii=False)
+
+    # Random 16-byte AES key (uuid.uuid4().hex[:16])
+    temp_key = uuid.uuid4().hex[:16].encode("utf-8")
+
+    # RSA encrypt temp key → Base64 → cosy_key
+    pub_key = load_pem_public_key(_RSA_PUBKEY_PEM.encode())
+    encrypted_key = pub_key.encrypt(temp_key, asym_padding.PKCS1v15())
+    cosy_key = base64.b64encode(encrypted_key).decode()
+
+    # AES-128-CBC encrypt user info (key=IV=temp_key, PKCS7 padding)
+    cipher = Cipher(algorithms.AES(temp_key), modes.CBC(temp_key))
+    encryptor = cipher.encryptor()
+    padded = _pkcs7_pad(user_json.encode("utf-8"))
+    encrypted_info = encryptor.update(padded) + encryptor.finalize()
+    encrypt_user_info = base64.b64encode(encrypted_info).decode()
+
+    return cosy_key, encrypt_user_info
+
+
 def _merge_cosy_credentials(creds: dict):
-    """从本地 ~/.lingma/cache/user 提取 cosy_key 和 encrypt_user_info"""
+    """优先本地生成 COSY 凭据，回退到本地缓存提取"""
+    # 尝试本地生成
+    if creds.get("security_oauth_token") and creds.get("refresh_token"):
+        try:
+            cosy_key, encrypt_user_info = generate_cosy_credentials(creds)
+            creds["cosy_key"] = cosy_key
+            creds["encrypt_user_info"] = encrypt_user_info
+            creds["user_id"] = creds.get("uid", "")
+            print("[*] 已本地生成 COSY 凭据（RSA+AES，无需服务器）")
+            return
+        except Exception as e:
+            print(f"[!] 本地生成 COSY 凭据失败: {e}，尝试从缓存提取...")
+
+    # 回退: 从本地 ~/.lingma/cache/user 提取
     try:
         from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
@@ -601,9 +683,6 @@ def _merge_cosy_credentials(creds: dict):
             return
 
         mid = id_path.read_text().strip()
-        if mid != creds.get("machine_id", ""):
-            return
-
         enc_data = base64.b64decode(user_path.read_text().strip())
         key = mid[:16].encode()
         cipher = Cipher(algorithms.AES(key), modes.CBC(key))
@@ -617,8 +696,8 @@ def _merge_cosy_credentials(creds: dict):
             creds["encrypt_user_info"] = data["encrypt_user_info"]
             creds["user_id"] = data.get("uid", creds.get("uid", ""))
             print("[*] 已从本地缓存提取 COSY 凭据（用于 Chat API）")
-    except Exception as e:
-        pass  # 缓存不可用不影响 OAuth 登录
+    except Exception:
+        pass
 
 
 def cmd_status(args):
