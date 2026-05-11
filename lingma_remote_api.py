@@ -250,7 +250,10 @@ class LingmaRemoteAPI:
         return headers
 
     def _build_chat_body(self, question: str, system_prompt: str = None,
-                         task_id: str = 'question_refine', model: str = '') -> str:
+                         task_id: str = 'question_refine', model: str = '',
+                         tools: list = None, tool_choice: str = None,
+                         messages: list = None, image_urls: list = None,
+                         is_vl: bool = False) -> str:
         """构造 chat POST body (原始 JSON，无需 Encode=1 编码)"""
         self._read_credentials()
 
@@ -260,12 +263,28 @@ class LingmaRemoteAPI:
         if system_prompt is None:
             system_prompt = 'You are a helpful AI coding assistant.'
 
+        if messages is None:
+            messages = [
+                {
+                    'role': 'system',
+                    'content': system_prompt,
+                    'response_meta': {'id': '', 'usage': {'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0}},
+                    'reasoning_content_signature': '',
+                },
+                {
+                    'role': 'user',
+                    'content': question,
+                    'response_meta': {'id': '', 'usage': {'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0}},
+                    'reasoning_content_signature': '',
+                },
+            ]
+
         payload = {
             'request_id': request_id,
             'request_set_id': '',
             'chat_record_id': request_id,
             'stream': True,
-            'image_urls': None,
+            'image_urls': image_urls,
             'is_reply': False,
             'is_retry': False,
             'session_id': '',
@@ -279,26 +298,13 @@ class LingmaRemoteAPI:
             'task_id': task_id,
             'model_config': {
                 'key': model, 'display_name': '', 'model': model, 'format': '',
-                'is_vl': False, 'is_reasoning': False, 'api_key': '', 'url': '',
+                'is_vl': is_vl, 'is_reasoning': False, 'api_key': '', 'url': '',
                 'source': '', 'max_input_tokens': 0, 'enable': False,
                 'price_factor': 0, 'original_price_factor': 0,
                 'is_default': False, 'is_new': False,
                 'exclude_tags': None, 'tags': None, 'icon': None, 'strategies': None,
             },
-            'messages': [
-                {
-                    'role': 'system',
-                    'content': system_prompt,
-                    'response_meta': {'id': '', 'usage': {'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0}},
-                    'reasoning_content_signature': '',
-                },
-                {
-                    'role': 'user',
-                    'content': question,
-                    'response_meta': {'id': '', 'usage': {'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0}},
-                    'reasoning_content_signature': '',
-                },
-            ],
+            'messages': messages,
             'business': {
                 'product': 'jb_plugin',
                 'version': '2.11.2',
@@ -310,11 +316,95 @@ class LingmaRemoteAPI:
             },
         }
 
+        if tools:
+            payload['tools'] = tools
+            payload['tool_choice'] = tool_choice or 'auto'
+
         return json.dumps(payload, separators=(',', ':'), ensure_ascii=False)
 
+    def _parse_sse(self, raw: str) -> dict:
+        """解析 SSE 响应，提取 content + tool_calls
+
+        Returns:
+            {
+                'content': str,
+                'tool_calls': list[{id, type, function:{name, arguments}}],
+                'finish_reason': str,
+                'usage': dict | None,
+            }
+        """
+        contents = []
+        tool_calls_map = {}  # index -> {id, type, function:{name, arguments}}
+        finish_reason = ''
+        usage = None
+
+        for line in raw.split('\n'):
+            if not line.startswith('data:'):
+                continue
+            try:
+                outer = json.loads(line[5:])
+                body_text = outer.get('body', '')
+                if not body_text or body_text == '[DONE]':
+                    continue
+                inner = json.loads(body_text)
+
+                usage = inner.get('usage') or usage
+                for c in inner.get('choices', []):
+                    fr = c.get('finish_reason', '')
+                    if fr:
+                        finish_reason = fr
+
+                    delta = c.get('delta', {})
+                    # Content
+                    text = delta.get('content', '')
+                    if text:
+                        contents.append(text)
+
+                    # Tool calls (OpenAI streaming format)
+                    for tc in delta.get('tool_calls', []):
+                        idx = tc.get('index', 0)
+                        if idx not in tool_calls_map:
+                            tool_calls_map[idx] = {
+                                'id': '', 'type': 'function',
+                                'function': {'name': '', 'arguments': ''},
+                            }
+                        entry = tool_calls_map[idx]
+                        if tc.get('id'):
+                            entry['id'] = tc['id']
+                        if tc.get('type'):
+                            entry['type'] = tc['type']
+                        fn = tc.get('function', {})
+                        if fn.get('name'):
+                            entry['function']['name'] += fn['name']
+                        if fn.get('arguments'):
+                            entry['function']['arguments'] += fn['arguments']
+
+                    # Some responses use delta.tool_call_id (non-standard)
+                    tc_id = delta.get('tool_call_id')
+                    if tc_id and 0 not in tool_calls_map:
+                        tool_calls_map[0] = {
+                            'id': tc_id, 'type': 'function',
+                            'function': {'name': '', 'arguments': ''},
+                        }
+            except (json.JSONDecodeError, KeyError):
+                pass
+
+        # Sort by index
+        tool_calls = [tool_calls_map[i] for i in sorted(tool_calls_map)]
+
+        return {
+            'content': ''.join(contents),
+            'tool_calls': tool_calls,
+            'finish_reason': finish_reason,
+            'usage': usage,
+        }
+
     def chat(self, question: str, system_prompt: str = None, timeout: int = 60,
-             task_id: str = 'question_refine', model: str = '') -> str:
-        """发送聊天请求并获取回复
+             task_id: str = 'question_refine', model: str = '',
+             tools: list = None, tool_choice: str = None,
+             messages: list = None, image_urls: list = None,
+             is_vl: bool = False) -> str:
+        """发送聊天请求并获取回复（向后兼容，仅返回文本）
 
         Args:
             question: 用户提问
@@ -322,16 +412,43 @@ class LingmaRemoteAPI:
             timeout: 超时秒数
             task_id: 任务类型
             model: 模型 key (空=auto)
+            tools: OpenAI 格式工具定义列表
+            tool_choice: "auto" | "none" | {"type":"function","function":{"name":"xxx"}}
+            messages: 自定义消息列表
+            image_urls: 图片 URL 列表
+            is_vl: 是否为视觉模型
 
         Returns:
             模型回复文本
+        """
+        result = self.chat_raw(
+            question, system_prompt=system_prompt, timeout=timeout,
+            task_id=task_id, model=model,
+            tools=tools, tool_choice=tool_choice, messages=messages,
+            image_urls=image_urls, is_vl=is_vl,
+        )
+        return result['content']
+
+    def chat_raw(self, question: str, system_prompt: str = None, timeout: int = 60,
+                 task_id: str = 'question_refine', model: str = '',
+                 tools: list = None, tool_choice: str = None,
+                 messages: list = None, image_urls: list = None,
+                 is_vl: bool = False) -> dict:
+        """发送聊天请求，返回完整解析结果（含 tool_calls）
+
+        Returns:
+            {'content': str, 'tool_calls': list, 'finish_reason': str, 'usage': dict|None}
         """
         path = self.CHAT_PATH
         query = '?FetchKeys=llm_model_result&AgentId=agent_common'
         full_path = path + query
 
-        body = self._build_chat_body(question, system_prompt=system_prompt,
-                                     task_id=task_id, model=model)
+        body = self._build_chat_body(
+            question, system_prompt=system_prompt,
+            task_id=task_id, model=model,
+            tools=tools, tool_choice=tool_choice, messages=messages,
+            image_urls=image_urls, is_vl=is_vl,
+        )
         headers = self._make_headers(path, body)
 
         cmd = ['curl', '-s', '--compressed', '--max-time', str(timeout)]
@@ -340,25 +457,127 @@ class LingmaRemoteAPI:
         cmd.extend(['-d', body, f'{self.BASE_URL}{full_path}'])
 
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 10)
+        return self._parse_sse(result.stdout)
 
-        # 解析 SSE 响应: data:{"body":"<JSON>","statusCodeValue":200}
-        contents = []
-        for line in result.stdout.split('\n'):
-            if line.startswith('data:'):
-                try:
-                    outer = json.loads(line[5:])
-                    body_text = outer.get('body', '')
-                    if not body_text or body_text == '[DONE]':
-                        continue
-                    inner = json.loads(body_text)
-                    for c in inner.get('choices', []):
-                        delta = c.get('delta', {}).get('content', '')
-                        if delta:
-                            contents.append(delta)
-                except (json.JSONDecodeError, KeyError):
-                    pass
+    UPLOAD_PATH = '/api/v2/image/upload'
 
-        return ''.join(contents)
+    def upload_image(self, image_path: str) -> dict:
+        """上传图片到 Lingma CDN，返回 URL
+
+        Args:
+            image_path: 本地图片文件路径 (JPEG/PNG/WebP)
+
+        Returns:
+            {'success': bool, 'image_url': str, 'request_id': str}
+        """
+        import mimetypes
+
+        path = Path(image_path)
+        if not path.exists():
+            return {'success': False, 'image_url': '', 'request_id': '',
+                    'error': f'File not found: {image_path}'}
+
+        ext = path.suffix.lower()
+        if ext not in ('.jpg', '.jpeg', '.png', '.webp'):
+            return {'success': False, 'image_url': '', 'request_id': '',
+                    'error': f'Unsupported format: {ext}. Use JPEG, PNG, or WebP'}
+
+        request_id = uuid.uuid4().hex
+        full_path = f'{self.UPLOAD_PATH}?request_id={request_id}'
+
+        # Read and base64 encode the image
+        with open(path, 'rb') as f:
+            image_data = base64.b64encode(f.read()).decode()
+
+        mime_type = mimetypes.guess_type(str(path))[0] or 'image/png'
+        data_uri = f'data:{mime_type};base64,{image_data}'
+
+        body_obj = json.dumps({
+            'ImageUri': data_uri,
+            'RequestId': request_id,
+        }, separators=(',', ':'))
+
+        headers = self._make_headers(self.UPLOAD_PATH, body_obj)
+
+        cmd = ['curl', '-s', '--compressed', '--max-time', '60']
+        for k, v in headers.items():
+            cmd.extend(['-H', f'{k}: {v}'])
+        cmd.extend(['-d', body_obj, f'{self.BASE_URL}{full_path}'])
+
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=70)
+        try:
+            resp = json.loads(result.stdout)
+            detail = resp.get('Data', {})
+            return {
+                'success': detail.get('Success', False),
+                'image_url': detail.get('ImageUrl', ''),
+                'request_id': detail.get('RequestId', request_id),
+            }
+        except (json.JSONDecodeError, KeyError):
+            return {'success': False, 'image_url': '', 'request_id': request_id,
+                    'error': result.stdout[:500]}
+
+    def chat_with_image(self, question: str, image_path: str = None,
+                        image_url: str = None, model: str = '',
+                        timeout: int = 120) -> dict:
+        """发送带图片的聊天请求
+
+        Args:
+            question: 关于图片的提问
+            image_path: 本地图片文件路径 (会自动上传)
+            image_url: 图片 URL (二选一)
+            model: 模型 key (空=auto)
+            timeout: 超时秒数
+
+        Returns:
+            {'content': str, 'tool_calls': list, 'finish_reason': str, 'usage': dict|None}
+        """
+        import mimetypes
+
+        urls = []
+
+        # 本地文件先上传
+        if image_path:
+            result = self.upload_image(image_path)
+            if not result['success']:
+                return {
+                    'content': f"图片上传失败: {result.get('error', 'unknown')}",
+                    'tool_calls': [], 'finish_reason': 'error', 'usage': None,
+                }
+            urls.append(result['image_url'])
+
+        if image_url:
+            urls.append(image_url)
+
+        # 构建 parts 消息 (OpenAI multimodal format)
+        parts = [{'type': 'text', 'text': question}]
+        for url in urls:
+            parts.append({
+                'type': 'image_url',
+                'image_url': {'url': url, 'detail': 'auto'},
+            })
+
+        messages = [
+            {
+                'role': 'system',
+                'content': 'You are a helpful AI coding assistant with vision capabilities.',
+                'response_meta': {'id': '', 'usage': {'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0}},
+                'reasoning_content_signature': '',
+            },
+            {
+                'role': 'user',
+                'content': question,
+                'parts': parts,
+                'response_meta': {'id': '', 'usage': {'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0}},
+                'reasoning_content_signature': '',
+            },
+        ]
+
+        return self.chat_raw(
+            question='', messages=messages,
+            image_urls=urls if urls else None,
+            is_vl=True, model=model, timeout=timeout,
+        )
 
     def get_models(self) -> list:
         """获取可用模型列表"""
@@ -381,6 +600,8 @@ class LingmaRemoteAPI:
 
 
 if __name__ == '__main__':
+    import sys
+
     api = LingmaRemoteAPI()
     api._read_credentials()
 
@@ -388,13 +609,92 @@ if __name__ == '__main__':
     print(f'Machine ID: {api._machine_id}')
     print(f'User ID:    {api._user_id}')
 
-    print()
-    print('=== Models ===')
-    models = api.get_models()
-    for m in models[:5]:
-        print(f'  {m.get("display_name", "?")} ({m.get("key", "?")})')
+    mode = sys.argv[1] if len(sys.argv) > 1 else 'basic'
 
-    print()
-    print('=== Chat Test ===')
-    response = api.chat('Reply with just the word: Success')
-    print(f'Response: {response}')
+    if mode == 'models':
+        print('\n=== Models ===')
+        models = api.get_models()
+        for m in models:
+            vl = ' [VL]' if m.get('multiModalSupported') or m.get('is_vl') else ''
+            print(f'  {m.get("display_name", "?")} ({m.get("key", "?")}){vl}')
+
+    elif mode == 'tool':
+        print('\n=== Tool Call Test ===')
+        tools = [
+            {
+                'type': 'function',
+                'function': {
+                    'name': 'get_current_time',
+                    'description': 'Get the current date and time',
+                    'parameters': {
+                        'type': 'object',
+                        'properties': {
+                            'timezone': {
+                                'type': 'string',
+                                'description': 'Timezone (e.g. UTC, Asia/Shanghai)',
+                            },
+                        },
+                        'required': [],
+                    },
+                },
+            },
+        ]
+        result = api.chat_raw(
+            'What time is it now?',
+            tools=tools, tool_choice='auto',
+        )
+        print(f'Content:       {result["content"]}')
+        print(f'Finish reason: {result["finish_reason"]}')
+        print(f'Tool calls:    {len(result["tool_calls"])}')
+        for tc in result['tool_calls']:
+            fn = tc['function']
+            print(f'  [{tc["id"]}] {fn["name"]}({fn["arguments"]})')
+        if result['usage']:
+            print(f'Usage: {result["usage"]}')
+
+    elif mode == 'upload':
+        if len(sys.argv) < 3:
+            print('Usage: python lingma_remote_api.py upload <image_path>')
+            sys.exit(1)
+        print(f'\n=== Upload Image ===')
+        result = api.upload_image(sys.argv[2])
+        print(f'Success:    {result["success"]}')
+        print(f'Image URL:  {result["image_url"]}')
+        print(f'Request ID: {result["request_id"]}')
+        if result.get('error'):
+            print(f'Error:      {result["error"]}')
+
+    elif mode == 'vision':
+        if len(sys.argv) < 3:
+            print('Usage: python lingma_remote_api.py vision <question> [--url URL] [--file PATH]')
+            sys.exit(1)
+        question = sys.argv[2]
+        img_url = None
+        img_file = None
+        i = 3
+        while i < len(sys.argv):
+            if sys.argv[i] == '--url' and i + 1 < len(sys.argv):
+                img_url = sys.argv[i + 1]
+                i += 2
+            elif sys.argv[i] == '--file' and i + 1 < len(sys.argv):
+                img_file = sys.argv[i + 1]
+                i += 2
+            else:
+                i += 1
+
+        print(f'\n=== Vision Test ===')
+        print(f'Question: {question}')
+        if img_file:
+            print(f'File:     {img_file}')
+        if img_url:
+            print(f'URL:      {img_url}')
+
+        result = api.chat_with_image(question, image_path=img_file, image_url=img_url)
+        print(f'\nResponse: {result["content"]}')
+        if result['usage']:
+            print(f'Usage: {result["usage"]}')
+
+    else:
+        print('\n=== Chat Test ===')
+        response = api.chat('Reply with just the word: Success')
+        print(f'Response: {response}')

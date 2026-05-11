@@ -395,6 +395,24 @@ if __name__ == '__main__':
             creds['user_id'], creds['machine_id']
         )
 
+    elif cmd == 'refresh-token':
+        print("=== Refresh Token (v3 SIGN + fallback) ===")
+        try:
+            from lingma_token_refresh import auto_refresh_and_update
+        except ImportError:
+            print("[!] lingma_token_refresh.py not found")
+            sys.exit(1)
+        result = auto_refresh_and_update(creds)
+        if result.get('success'):
+            print(f"\n[OK] Refresh success (method: {result.get('method', 'unknown')})")
+            if result.get('security_oauth_token'):
+                print(f"  New PT: {result['security_oauth_token'][:30]}...")
+            if result.get('expire_time'):
+                print(f"  Expire: {result['expire_time']}")
+        else:
+            print("\n[!] All refresh paths failed")
+            print("  Try: python lingma_oauth_complete.py login")
+
     else:
         print(f"Unknown command: {cmd}")
-        print("Available: status, login, grants, generate-credentials, test-chat")
+        print("Available: status, login, grants, generate-credentials, test-chat, refresh-token")

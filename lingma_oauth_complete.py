@@ -725,65 +725,30 @@ def cmd_status(args):
 
 
 def cmd_refresh(args):
-    creds = load_credentials()
-    if not creds:
-        print("[!] 未找到凭据")
-        return
-
-    uid = creds.get("uid", "")
-    oauth_token = creds.get("security_oauth_token", "")
-    refresh_token = creds.get("refresh_token", "")
-    machine_id = creds.get("machine_id", "")
-    org_id = creds.get("org_id", "")
-
-    if not all([uid, oauth_token, refresh_token]):
-        print("[!] 凭据不完整")
-        return
-
-    print(f"[*] 刷新 Token...")
-    print(f"    UID: {uid}")
-    print(f"    Token: {oauth_token[:30]}...")
-    print(f"    Refresh: {refresh_token[:30]}...")
-
-    body = {
-        "userId": uid,
-        "orgId": org_id or "",
-        "securityOauthToken": oauth_token,
-        "refreshToken": refresh_token,
-    }
-    body_str = json.dumps(body, ensure_ascii=False, separators=(",", ":"))
-    url = f"{BIG_MODEL_ENDPOINT}/api/v3/user/refresh_token"
-    headers = build_sign_headers(body_str, machine_id, oauth_token)
-
-    print(f"\n[*] POST {url}")
-
-    req = urllib.request.Request(url, data=body_str.encode(), headers=headers, method="POST")
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
-
+    """Token refresh via lingma_token_refresh module (v3 SIGN + LSP fallback)."""
     try:
-        resp = urllib.request.urlopen(req, context=ctx, timeout=30)
-        resp_body = resp.read().decode()
-        print(f"    HTTP {resp.status}")
-        result = json.loads(resp_body) if resp_body else {}
-        print(f"    Response: {json.dumps(result, ensure_ascii=False)[:300]}")
+        from lingma_token_refresh import auto_refresh_and_update, load_credentials as load_v3_creds
+    except ImportError:
+        print("[!] lingma_token_refresh.py not found")
+        return
 
-        if result.get("refreshToken") and result.get("securityOauthToken"):
-            creds["security_oauth_token"] = result["securityOauthToken"]
-            creds["refresh_token"] = result["refreshToken"]
-            if result.get("expireTime"):
-                creds["expire_time"] = result["expireTime"]
-            save_credentials(creds)
-            print(f"\n[OK] Token 刷新成功!")
-        else:
-            print(f"\n[!] 刷新失败: {json.dumps(result, ensure_ascii=False)[:200]}")
+    v3_creds = load_v3_creds()
+    print(f"[*] 刷新 Token...")
+    print(f"    UID: {v3_creds.get('user_id', '')}")
+    print(f"    Token: {v3_creds.get('pt_token', '')[:30]}...")
+    print(f"    Refresh: {v3_creds.get('rt_token', '')[:30]}...")
 
-    except urllib.error.HTTPError as e:
-        err = e.read().decode(errors="replace")[:500]
-        print(f"\n[!] HTTP {e.code}: {err}")
-    except Exception as e:
-        print(f"\n[!] 错误: {e}")
+    result = auto_refresh_and_update(v3_creds)
+
+    if result.get('success'):
+        print(f"\n[OK] Token 刷新成功! (method: {result.get('method', 'unknown')})")
+        if result.get('security_oauth_token'):
+            print(f"    New PT: {result['security_oauth_token'][:30]}...")
+        if result.get('expire_time'):
+            print(f"    Expire: {result['expire_time']}")
+    else:
+        print(f"\n[!] 所有刷新路径均失败")
+        print(f"    建议: python lingma_oauth_complete.py login")
 
 
 def cmd_manual(args):
